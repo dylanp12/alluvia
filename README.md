@@ -2,6 +2,7 @@
 
 <p align="center">
   <a href="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml"><img src="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://pypi.org/project/alluvia/"><img src="https://img.shields.io/pypi/v/alluvia?color=d4a017" alt="pypi"></a>
   <img src="https://img.shields.io/badge/license-MIT-d4a017" alt="MIT">
   <img src="https://img.shields.io/badge/python-3.12+-d4a017" alt="python">
   <img src="https://img.shields.io/badge/local--first-always-d4a017" alt="local-first">
@@ -41,13 +42,11 @@ your present self is holding.
 ## Sixty seconds
 
 ```bash
-git clone <this-repo> && cd alluvia
-uv run alluvia init        # detects your sources, sets up your LLM provider
-uv run alluvia refresh     # distill → embed → cluster → map (local embeddings)
-uv run alluvia themes
+pip install alluvia        # or: uv tool install alluvia
+alluvia init               # detects your sources, sets up your LLM provider
+alluvia refresh            # distill → embed → cluster → map (local embeddings)
+alluvia themes && alluvia serve --open
 ```
-
-*(PyPI package coming; installs the `alluvia` command.)*
 
 ## The four lenses
 
