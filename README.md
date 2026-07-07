@@ -42,11 +42,13 @@ your present self is holding.
 ## Sixty seconds
 
 ```bash
-pip install alluvia        # or: uv tool install alluvia
+uv tool install alluvia    # or: pip install alluvia
 alluvia init               # detects your sources, sets up your LLM provider
 alluvia refresh            # distill → embed → cluster → map (local embeddings)
 alluvia themes && alluvia serve --open
 ```
+
+One-shot trial without installing: `uvx alluvia init`.
 
 ## The four lenses
 
