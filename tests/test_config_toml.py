@@ -29,9 +29,9 @@ groq = "toml-key"
 def _use(tmp_path, monkeypatch, text=CFG):
     p = tmp_path / "config.toml"
     p.write_text(text)
-    monkeypatch.setenv("SIFT_CONFIG", str(p))
-    for var in ("SIFT_LLM_PROVIDER", "SIFT_LLM_MODEL", "SIFT_LLM_MODEL_PROPOSE",
-                "SIFT_DIGEST_DAYS", "SIFT_DIGEST_PROPOSALS", "SIFT_MIN_CLUSTER",
+    monkeypatch.setenv("ALLUVIA_CONFIG", str(p))
+    for var in ("ALLUVIA_LLM_PROVIDER", "ALLUVIA_LLM_MODEL", "ALLUVIA_LLM_MODEL_PROPOSE",
+                "ALLUVIA_DIGEST_DAYS", "ALLUVIA_DIGEST_PROPOSALS", "ALLUVIA_MIN_CLUSTER",
                 "GROQ_API_KEY"):
         monkeypatch.delenv(var, raising=False)
     config.reset_toml_cache()
@@ -52,9 +52,9 @@ def test_toml_values_used_when_env_absent(tmp_path, monkeypatch):
 
 def test_env_beats_toml(tmp_path, monkeypatch):
     _use(tmp_path, monkeypatch)
-    monkeypatch.setenv("SIFT_LLM_PROVIDER", "groq")
-    monkeypatch.setenv("SIFT_LLM_MODEL_PROPOSE", "env-propose")
-    monkeypatch.setenv("SIFT_DIGEST_DAYS", "11")
+    monkeypatch.setenv("ALLUVIA_LLM_PROVIDER", "groq")
+    monkeypatch.setenv("ALLUVIA_LLM_MODEL_PROPOSE", "env-propose")
+    monkeypatch.setenv("ALLUVIA_DIGEST_DAYS", "11")
     monkeypatch.setenv("GROQ_API_KEY", "env-key")
     assert config.llm_provider() == "groq"
     assert config.llm_model("groq", role="propose") == "env-propose"
@@ -63,8 +63,8 @@ def test_env_beats_toml(tmp_path, monkeypatch):
 
 
 def test_missing_file_means_defaults(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_CONFIG", str(tmp_path / "absent.toml"))
-    for var in ("SIFT_LLM_PROVIDER", "SIFT_DIGEST_DAYS"):
+    monkeypatch.setenv("ALLUVIA_CONFIG", str(tmp_path / "absent.toml"))
+    for var in ("ALLUVIA_LLM_PROVIDER", "ALLUVIA_DIGEST_DAYS"):
         monkeypatch.delenv(var, raising=False)
     config.reset_toml_cache()
     assert config.llm_provider() == "groq"
@@ -72,7 +72,7 @@ def test_missing_file_means_defaults(tmp_path, monkeypatch):
 
 
 def test_write_config_0600_and_roundtrip(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_CONFIG", str(tmp_path / "c.toml"))
+    monkeypatch.setenv("ALLUVIA_CONFIG", str(tmp_path / "c.toml"))
     config.reset_toml_cache()
     path = config.write_config({"llm": {"provider": "groq",
                                         "roles": {"propose": "big-model"}},

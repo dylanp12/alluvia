@@ -78,17 +78,58 @@ class FakeLLM:
         return r
 
 
-def make_llm(role: str | None = None) -> LLM:
-    """Role-aware factory: SIFT_LLM_MODEL_<ROLE> -> SIFT_LLM_MODEL -> provider
-    default. Roles: distill, label, status, why, propose."""
-    provider = config.llm_provider()
-    if provider not in ("anthropic", "openai", "groq"):
-        raise ValueError(f"unknown SIFT_LLM_PROVIDER: {provider}")
-    model = config.llm_model(provider, role)
-    key = config.provider_key(provider)          # env > config.toml [keys]
+def _adapter(provider: str, model: str, key: str | None) -> LLM:
     if provider == "anthropic":
         return AnthropicLLM(model, api_key=key)
     if provider == "openai":
         return OpenAICompatLLM(model, api_key=key)
     return OpenAICompatLLM(model, api_key=key,
                            base_url="https://api.groq.com/openai/v1")
+
+
+# Shared within one process so every role sees the same breaker state; the
+# CLI/MCP entrypoints swap in the SQLite-backed store for cross-run memory.
+_process_health = None
+
+
+def _default_health():
+    global _process_health
+    if _process_health is None:
+        from alluvia.llm.governor import MemoryHealthStore
+        _process_health = MemoryHealthStore()
+    return _process_health
+
+
+def make_llm(role: str | None = None, health=None) -> LLM:
+    """Role-aware factory: ALLUVIA_LLM_MODEL_<ROLE> -> ALLUVIA_LLM_MODEL -> provider
+    default, expanded to the role's fallthrough chain and wrapped in a
+    Governor (backoff, per-model breakers, chain fallthrough — see
+    llm/governor.py). Roles: distill, label, status, why, propose."""
+    from alluvia.llm.governor import Governor
+    provider = config.llm_provider()
+    if provider not in ("anthropic", "openai", "groq"):
+        raise ValueError(f"unknown ALLUVIA_LLM_PROVIDER: {provider}")
+    key = config.provider_key(provider)          # env > config.toml [keys]
+    candidates = [(m, _adapter(provider, m, key))
+                  for m in config.llm_chain(provider, role)]
+    return Governor(provider, candidates,
+                    store=health if health is not None else _default_health(),
+                    patience=config.llm_patience())
+
+
+class RoleRouter:
+    """Lazy per-role LLMs behind one object. The engine asks `for_role(...)` at
+    each call site; plain LLMs (tests, single-model setups) skip the router."""
+
+    def __init__(self, build=make_llm, health=None):
+        self._build = build
+        self._health = health
+        self._cache: dict[str | None, LLM] = {}
+
+    def for_role(self, role: str | None) -> LLM:
+        if role not in self._cache:
+            self._cache[role] = self._build(role=role, health=self._health)
+        return self._cache[role]
+
+    def complete_json(self, system: str, user: str) -> Any:
+        return self.for_role(None).complete_json(system, user)

@@ -9,8 +9,8 @@ runner = CliRunner()
 
 
 def _env(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "d.db"))
-    monkeypatch.setenv("SIFT_PENDING_FLAG", str(tmp_path / "pending"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "d.db"))
+    monkeypatch.setenv("ALLUVIA_PENDING_FLAG", str(tmp_path / "pending"))
     conn = connect(str(tmp_path / "d.db"))
     init_schema(conn, embed_dim=8)
     return Repo(conn), tmp_path / "pending"

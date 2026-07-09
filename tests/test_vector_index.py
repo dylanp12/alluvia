@@ -55,9 +55,9 @@ def test_sqlite_vec_index_protocol_and_rebuild(tmp_path):
 
 def test_make_index_env_selection_and_fallback(tmp_path, monkeypatch):
     conn = _conn(tmp_path)
-    monkeypatch.setenv("SIFT_VECTOR_BACKEND", "numpy")
+    monkeypatch.setenv("ALLUVIA_VECTOR_BACKEND", "numpy")
     assert isinstance(make_index(conn, dim=8), NumpyIndex)
-    monkeypatch.delenv("SIFT_VECTOR_BACKEND", raising=False)
+    monkeypatch.delenv("ALLUVIA_VECTOR_BACKEND", raising=False)
     idx = make_index(conn, dim=8)                        # default sqlite-vec...
     assert isinstance(idx, (SqliteVecIndex, NumpyIndex))  # ...or logged numpy fallback
 

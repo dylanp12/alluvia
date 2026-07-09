@@ -20,7 +20,7 @@ class ScriptedEmbedder:
 
 
 def test_refresh_and_themes(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "m1.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "m1.db"))
     monkeypatch.setattr(cli, "EMBED_DIM", 8)
 
     def fake_build_engine(repo):

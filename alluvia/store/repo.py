@@ -369,3 +369,62 @@ class Repo:
             (outcome, datetime.now(timezone.utc).isoformat(), user_id, digest_id, n))
         self.conn.commit()
         return item
+
+    # --- meta & llm health -------------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        r = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return r[0] if r else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+        self.conn.commit()
+
+    _HEALTH_COLS = ("cooldown_until", "rung", "consecutive", "est_rate",
+                    "last_success", "last_call")
+
+    def llm_health_load(self, provider: str, model: str) -> dict | None:
+        r = self.conn.execute(
+            "SELECT cooldown_until, rung, consecutive, est_rate, last_success, "
+            "last_call FROM llm_health WHERE provider=? AND model=?",
+            (provider, model)).fetchone()
+        return dict(zip(self._HEALTH_COLS, r)) if r else None
+
+    def llm_health_save(self, provider: str, model: str, state: dict) -> None:
+        vals = [state.get(c) for c in self._HEALTH_COLS]
+        self.conn.execute(
+            "INSERT INTO llm_health(provider, model, cooldown_until, rung, "
+            "consecutive, est_rate, last_success, last_call) "
+            "VALUES (?,?,COALESCE(?,0),COALESCE(?,0),COALESCE(?,0),?,"
+            "COALESCE(?,0),COALESCE(?,0)) "
+            "ON CONFLICT(provider, model) DO UPDATE SET "
+            "cooldown_until=COALESCE(excluded.cooldown_until,0), "
+            "rung=COALESCE(excluded.rung,0), "
+            "consecutive=COALESCE(excluded.consecutive,0), "
+            "est_rate=excluded.est_rate, "
+            "last_success=COALESCE(excluded.last_success,0), "
+            "last_call=COALESCE(excluded.last_call,0)",
+            (provider, model, *vals))
+        self.conn.commit()
+
+    def llm_health_all(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT provider, model, cooldown_until, rung, consecutive, "
+            "est_rate, last_success, last_call FROM llm_health").fetchall()
+        return [{"provider": r[0], "model": r[1],
+                 **dict(zip(self._HEALTH_COLS, r[2:]))} for r in rows]
+
+
+class LLMHealthStore:
+    """Adapter giving the governor its load/save contract over the repo."""
+
+    def __init__(self, repo: Repo):
+        self.repo = repo
+
+    def load(self, provider: str, model: str) -> dict | None:
+        return self.repo.llm_health_load(provider, model)
+
+    def save(self, provider: str, model: str, state: dict) -> None:
+        self.repo.llm_health_save(provider, model, state)

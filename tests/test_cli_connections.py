@@ -16,7 +16,7 @@ class _Emb:                     # explain() never calls embed(); a stub suffices
 
 def test_connections_shows_edge_and_fills_why(tmp_path, monkeypatch):
     dbpath = str(tmp_path / "c.db")
-    monkeypatch.setenv("SIFT_DB", dbpath)
+    monkeypatch.setenv("ALLUVIA_DB", dbpath)
     conn = connect(dbpath); init_schema(conn, embed_dim=8); repo = Repo(conn)
     repo.upsert_notes([
         Note(id="note:a", user_id="local", session_id="s", span_ref="", kind="idea",

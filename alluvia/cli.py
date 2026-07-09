@@ -21,8 +21,12 @@ def _repo() -> Repo:
 def build_engine(repo: Repo):
     from alluvia.engine.engine import Engine
     from alluvia.engine.embed import FastEmbedEmbedder
-    from alluvia.llm.client import make_llm
-    return Engine(repo, FastEmbedEmbedder(), make_llm(),
+    from alluvia.llm.client import RoleRouter
+    from alluvia.store.repo import LLMHealthStore
+    # role-routed models, governed with SQLite-persisted breaker state: a
+    # short-lived CLI run respects cooldowns learned by previous runs
+    return Engine(repo, FastEmbedEmbedder(),
+                  RoleRouter(health=LLMHealthStore(repo)),
                   min_cluster_size=config.min_cluster())
 
 
@@ -70,11 +74,54 @@ def show(session_id: str):
         typer.echo(f"\n[{m.role}] {m.text}")
 
 
+def _echo_refresh_summary(stats: dict) -> None:
+    """Per-stage outcome of a refresh — a degraded map must never be
+    indistinguishable from a healthy one."""
+    d, t = stats.get("distill", {}), stats.get("themes", {})
+    if d.get("todo"):
+        line = f"distilled: {d.get('ok', 0)}/{d['todo']} sessions"
+        extras = [f"{d[k]} {w}" for k, w in
+                  (("zero_note", "empty"), ("failed", "failed")) if d.get(k)]
+        typer.echo(line + (f" ({', '.join(extras)})" if extras else ""))
+    if t.get("built"):
+        typer.echo(f"labels: {t.get('label_cached', 0)} cached · "
+                   f"{t.get('label_llm', 0)} fresh · "
+                   f"{t.get('label_fallback', 0)} pending")
+        typer.echo(f"status: {t.get('status_ok', 0)} classified · "
+                   f"{t.get('status_heuristic', 0)} heuristic · "
+                   f"{t.get('status_error', 0)} failed · "
+                   f"{t.get('status_na', 0)} n/a")
+    if stats.get("degraded"):
+        retry = (f" — provider retry after {stats['retry_at'][:16]} UTC"
+                 if stats.get("retry_at") else "")
+        typer.echo(f"⚠ the LLM provider was rate-limited during this run{retry}")
+        typer.echo("  the map degraded gracefully; re-run `alluvia refresh` to "
+                   "complete it (pending labels/statuses retry automatically)")
+
+
+def _maybe_degraded_hint(repo) -> None:
+    import json as _json
+    raw = repo.get_meta("last_refresh")
+    if not raw:
+        return
+    try:
+        meta = _json.loads(raw)
+    except ValueError:
+        return
+    if meta.get("degraded"):
+        retry = (f" (provider retry after {meta['retry_at'][:16]} UTC)"
+                 if meta.get("retry_at") else "")
+        typer.echo(f"⚠ last refresh was degraded by provider rate limits{retry} "
+                   f"— re-run `alluvia refresh` to complete the map")
+
+
 @app.command()
 def refresh():
     repo = _repo()
-    build_engine(repo).refresh(config.DEFAULT_USER)
+    stats = build_engine(repo).refresh(config.DEFAULT_USER)
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
+    if isinstance(stats, dict):
+        _echo_refresh_summary(stats)
 
 
 @app.command()
@@ -92,6 +139,7 @@ def themes():
         tag = " [muted]" if t.label.lower() in muted else ""
         typer.echo(f"• {t.label}{tag}  [{t.session_count} sessions/{t.source_count} sources]{span}")
         typer.echo(f"    {t.summary}")
+    _maybe_degraded_hint(repo)
 
 
 @app.command()
@@ -138,7 +186,10 @@ def build_propose_deps(repo: Repo):
     so tests inject fakes and the propose role map applies."""
     from alluvia.engine.embed import FastEmbedEmbedder
     from alluvia.llm.client import make_llm
-    return make_llm(role="propose"), make_llm(role="status"), FastEmbedEmbedder()
+    from alluvia.store.repo import LLMHealthStore
+    health = LLMHealthStore(repo)
+    return (make_llm(role="propose", health=health),
+            make_llm(role="status", health=health), FastEmbedEmbedder())
 
 
 def _feas_sort_key(p):
@@ -283,7 +334,15 @@ def unfinished(include_dormant: bool = typer.Option(False, "--include-dormant"))
     repo = _repo()
     themes = build_engine(repo).unfinished(config.DEFAULT_USER, include_dormant=include_dormant)
     if not themes:
-        typer.echo("no unfinished threads — run `alluvia refresh`")
+        all_themes = repo.list_themes(config.DEFAULT_USER)
+        if all_themes and all(t.status == "unknown" for t in all_themes):
+            # the truthful message: the classifier never ran, not "all done"
+            typer.echo("every theme's status is still 'unknown' — the status "
+                       "classifier hasn't completed. re-run `alluvia refresh` "
+                       "when your provider has headroom")
+        else:
+            typer.echo("no unfinished threads — run `alluvia refresh`")
+        _maybe_degraded_hint(repo)
         return
     for t in themes:
         span = ""
@@ -292,6 +351,7 @@ def unfinished(include_dormant: bool = typer.Option(False, "--include-dormant"))
         last = t.last_seen.date() if t.last_seen else "?"
         typer.echo(f"🧵 {t.label}   {t.status} · {t.session_count} sessions/{span} · last {last}")
         typer.echo(f"   {t.summary}")
+    _maybe_degraded_hint(repo)
 
 
 @app.command()
@@ -365,7 +425,7 @@ app.add_typer(digest_app, name="digest")
 
 
 def _pending_flag() -> str:
-    return os.environ.get("SIFT_PENDING_FLAG",
+    return os.environ.get("ALLUVIA_PENDING_FLAG",
                           os.path.expanduser("~/.alluvia/digest-pending"))
 
 
@@ -390,11 +450,13 @@ def digest_run(
         @property
         def gen_llm(self):
             from alluvia.llm.client import make_llm
-            return make_llm(role="propose")
+            from alluvia.store.repo import LLMHealthStore
+            return make_llm(role="propose", health=LLMHealthStore(repo))
         @property
         def critic_llm(self):
             from alluvia.llm.client import make_llm
-            return make_llm(role="status")
+            from alluvia.store.repo import LLMHealthStore
+            return make_llm(role="status", health=LLMHealthStore(repo))
     did, items = generate(repo, _Deps(), config.DEFAULT_USER, now)
     if not items:
         typer.echo("(silence — nothing cleared the bar)")

@@ -104,10 +104,17 @@ mid-conversation: *"you circled this in April — here's where you landed."*
 | Distill / label / propose calls | Your configured LLM provider, under your API key, secret-scrubbed first |
 | Telemetry | **There is none.** |
 
-Provider is your choice — Groq (free tier works; alluvia chains per-model daily
-budgets automatically), OpenAI, or Anthropic — with per-role model overrides
-(`SIFT_LLM_MODEL_PROPOSE=...` for a stronger generator, cheap models for bulk
-extraction).
+Provider is your choice — Groq (free tier works), OpenAI, or Anthropic — with
+per-role model overrides (`ALLUVIA_LLM_MODEL_PROPOSE=...` for a stronger
+generator, cheap models for bulk extraction).
+
+Rate limits are handled for you: every call runs behind a provider-agnostic
+governor with backoff, per-model circuit breakers, and automatic fallthrough
+across models (on Groq's free tier each model has its own daily budget — when
+one hits a wall, alluvia moves to the next and comes back later). If a stage
+still can't complete, `alluvia refresh` says so — per-stage counts plus the
+provider retry time — and finishes the rest of the map instead of failing.
+Pending labels and statuses retry automatically on the next refresh.
 
 ## How it works
 

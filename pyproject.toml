@@ -1,6 +1,6 @@
 [project]
 name = "alluvia"
-version = "0.1.0"
+version = "0.1.1"
 description = "Mine your AI conversations — every tool, every month — for the ideas you forgot you had. Local-first."
 readme = "README.md"
 license = {file = "LICENSE"}

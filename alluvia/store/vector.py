@@ -104,7 +104,7 @@ class SqliteVecIndex:
 
 
 def make_index(conn: sqlite3.Connection, dim: int) -> VectorIndex:
-    backend = os.environ.get("SIFT_VECTOR_BACKEND", "sqlite-vec")
+    backend = os.environ.get("ALLUVIA_VECTOR_BACKEND", "sqlite-vec")
     if backend == "numpy":
         return NumpyIndex(conn)
     try:

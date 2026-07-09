@@ -49,15 +49,33 @@ class SiftDeps:
     def gen_llm(self):
         if self._gen is None:
             from alluvia.llm.client import make_llm
-            self._gen = make_llm(role="propose")
+            from alluvia.store.repo import LLMHealthStore
+            self._gen = make_llm(role="propose", health=LLMHealthStore(self.repo))
         return self._gen
 
     @property
     def critic_llm(self):
         if self._critic is None:
             from alluvia.llm.client import make_llm
-            self._critic = make_llm(role="status")
+            from alluvia.store.repo import LLMHealthStore
+            self._critic = make_llm(role="status",
+                                    health=LLMHealthStore(self.repo))
         return self._critic
+
+
+def _refresh_meta(deps) -> dict:
+    """Last-refresh stats (engine writes them to meta) — lets tools flag a
+    degraded map instead of presenting it as healthy."""
+    try:
+        import json
+        raw = deps.repo.get_meta("last_refresh")
+        return json.loads(raw) if raw else {}
+    except Exception:
+        return {}
+
+
+_DEGRADED_WARNING = ("last refresh was degraded by provider rate limits — "
+                     "labels/statuses may be incomplete; re-run `alluvia refresh`")
 
 
 def _theme_json(t):
@@ -81,7 +99,10 @@ def recall_themes_impl(deps, query: str | None = None, limit: int = 10) -> dict:
             hit_ids = {h[0] for h in hits}
             scored = [(sum(1 for n in t.note_ids if n in hit_ids), t) for t in themes]
             themes = [t for score, t in sorted(scored, key=lambda x: -x[0]) if score > 0]
-        return {"themes": [_theme_json(t) for t in themes[:limit]], "limit": limit}
+        out = {"themes": [_theme_json(t) for t in themes[:limit]], "limit": limit}
+        if _refresh_meta(deps).get("degraded"):
+            out["warning"] = _DEGRADED_WARNING
+        return out
     except Exception as e:
         return {"error": str(e)}
 
@@ -129,7 +150,15 @@ def unfinished_threads_impl(deps, include_dormant: bool = False) -> dict:
             return 0
 
         themes.sort(key=lambda t: t.session_count * (span_days(t) + 1), reverse=True)
-        return {"threads": [_theme_json(t) for t in themes[:MAX_LIMIT]]}
+        out = {"threads": [_theme_json(t) for t in themes[:MAX_LIMIT]]}
+        if not out["threads"]:
+            everything = deps.repo.list_themes(user)
+            if ((everything and all(t.status == "unknown" for t in everything))
+                    or _refresh_meta(deps).get("degraded")):
+                out["note"] = ("empty because status classification hasn't "
+                               "completed (provider rate limits), not because "
+                               "nothing is unfinished — re-run `alluvia refresh`")
+        return out
     except Exception as e:
         return {"error": str(e)}
 
@@ -201,7 +230,7 @@ def get_digest_impl(deps) -> dict:
         last = deps.repo.latest_digest(user)
         if not last:
             return {"digest": None, "pending": False}
-        flag = os.environ.get("SIFT_PENDING_FLAG",
+        flag = os.environ.get("ALLUVIA_PENDING_FLAG",
                               os.path.expanduser("~/.alluvia/digest-pending"))
         items = deps.repo.digest_items(user, last[0])
         return {"digest": {"id": last[0], "created_at": last[1],

@@ -97,7 +97,7 @@ def test_nudge_cooldown_and_dismissal_learning(repo):
 
 def test_digest_proposals_env_off_skips_generation(repo, monkeypatch):
     _seed(repo)
-    monkeypatch.setenv("SIFT_DIGEST_PROPOSALS", "0")
+    monkeypatch.setenv("ALLUVIA_DIGEST_PROPOSALS", "0")
 
     class _MustNotBeCalled:
         def complete_json(self, s, u):

@@ -139,6 +139,17 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             pipeline_version INTEGER NOT NULL,
             PRIMARY KEY (user_id, session_id)
         );
+        CREATE TABLE IF NOT EXISTS llm_health (
+            provider TEXT NOT NULL,
+            model TEXT NOT NULL,
+            cooldown_until REAL NOT NULL DEFAULT 0,
+            rung INTEGER NOT NULL DEFAULT 0,
+            consecutive INTEGER NOT NULL DEFAULT 0,
+            est_rate REAL,
+            last_success REAL NOT NULL DEFAULT 0,
+            last_call REAL NOT NULL DEFAULT 0,
+            PRIMARY KEY (provider, model)
+        );
         """
     )
     conn.execute(

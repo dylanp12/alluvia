@@ -26,7 +26,7 @@ def _seed(dbpath):
 
 
 def test_proposals_orders_feasible_first_flags_shaky(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "c.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "c.db"))
     _seed(str(tmp_path / "c.db"))
     r = runner.invoke(cli.app, ["proposals"])
     assert r.exit_code == 0, r.output
@@ -35,7 +35,7 @@ def test_proposals_orders_feasible_first_flags_shaky(tmp_path, monkeypatch):
 
 
 def test_rate_updates_outcome(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "c.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "c.db"))
     _seed(str(tmp_path / "c.db"))
     r = runner.invoke(cli.app, ["rate", "prop:solid", "--keep", "--note", "good one"])
     assert r.exit_code == 0, r.output
@@ -45,7 +45,7 @@ def test_rate_updates_outcome(tmp_path, monkeypatch):
 
 
 def test_stats_shows_hit_rate(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "c.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "c.db"))
     _seed(str(tmp_path / "c.db"))
     r = runner.invoke(cli.app, ["stats"])
     assert r.exit_code == 0, r.output
@@ -53,7 +53,7 @@ def test_stats_shows_hit_rate(tmp_path, monkeypatch):
 
 
 def test_propose_command_uses_injected_deps(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "c.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "c.db"))
     from alluvia.llm.client import FakeLLM
     from alluvia.models import Link, Note
     conn = connect(str(tmp_path / "c.db"))

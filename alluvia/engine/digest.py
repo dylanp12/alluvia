@@ -75,7 +75,7 @@ def generate(repo, deps, user_id: str, now: datetime) -> tuple[int, list[dict]]:
                       "snapshot": snap})
 
     # C: one fresh proposal (bounded scheduled spend; degrade to skip).
-    # Disable (env SIFT_DIGEST_PROPOSALS=0 or [digest].proposals=false) for
+    # Disable (env ALLUVIA_DIGEST_PROPOSALS=0 or [digest].proposals=false) for
     # pure-recall digests with zero scheduled LLM spend.
     from alluvia import config as _config
     if not _config.digest_proposals_enabled():

@@ -22,7 +22,7 @@ def _seed(dbpath):
 
 
 def test_unfinished_lists_open_only_by_default(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "u.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "u.db"))
     _seed(str(tmp_path / "u.db"))
     r = runner.invoke(cli.app, ["unfinished"])
     assert r.exit_code == 0, r.output

@@ -26,6 +26,15 @@ def overview(repo, user_id: str) -> dict:
     dismissed = sum(1 for p in props if p.outcome == "dismissed")
     rated = kept + dismissed
     per_source = Counter(s.source for s in sessions)
+    refresh = None
+    raw = repo.get_meta("last_refresh")
+    if raw:
+        try:
+            m = json.loads(raw)
+            refresh = {"at": m.get("at"), "degraded": bool(m.get("degraded")),
+                       "retry_at": m.get("retry_at")}
+        except ValueError:
+            pass
     return {
         "sessions": len(sessions), "notes": len(notes), "themes": len(themes),
         "links": len(repo.list_links(user_id)),
@@ -33,6 +42,7 @@ def overview(repo, user_id: str) -> dict:
         "status_mix": dict(Counter(t.status for t in themes)),
         "proposals": {"total": len(props), "kept": kept, "dismissed": dismissed,
                       "hit_rate": (kept * 100 // rated) if rated else None},
+        "refresh": refresh,
     }
 
 

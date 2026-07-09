@@ -10,15 +10,39 @@ def scaled_min_cluster_size(n_notes: int) -> int:
     notes was too fragmented). Floor 2, ceiling 8."""
     return max(2, min(8, n_notes // 400))
 from alluvia.llm.client import LLM
+from alluvia.llm.governor import LLMUnavailable
 from alluvia.engine.embed import Embedder
 from alluvia.engine.cluster import cluster
 from alluvia.engine.label import label_cluster
 from alluvia.distill.distiller import Distiller
-from alluvia.models import Link, Note, Theme
+from alluvia.models import Link, Note, Theme, to_utc
 from alluvia.store.repo import Repo
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from alluvia.engine.link import compute_links
-from alluvia.engine.track import classify_status
+from alluvia.engine.track import classify_status, STALE_DAYS
+
+
+def _iso_ts(unix_ts: float) -> str:
+    return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+
+
+def _fallback_label(members: list[Note]) -> str:
+    """No-LLM label: first note, cut at a word boundary (never mid-word)."""
+    text = members[0].text if members else "Untitled"
+    if len(text) <= 40:
+        return text
+    cut = text[:40]
+    return (cut.rsplit(" ", 1)[0] if " " in cut else cut).strip()
+
+
+def _heuristic_status(theme: Theme, now: datetime) -> str:
+    """Stopgap for recurring themes when the status LLM is unavailable: a
+    thread someone keeps returning to is presumed open until classified;
+    the existing staleness overlay demotes quiet ones to dormant."""
+    last = to_utc(theme.last_seen)
+    if last and last < to_utc(now) - timedelta(days=STALE_DAYS):
+        return "dormant"
+    return "open"
 
 
 class Engine:
@@ -27,19 +51,40 @@ class Engine:
         self.repo = repo
         self.embedder = embedder
         self.llm = llm
-        self.distiller = Distiller(llm)
+        self.distiller = Distiller(self._llm_for("distill"))
         self.min_cluster_size = min_cluster_size    # None -> corpus-scaled
+
+    def _llm_for(self, role: str) -> LLM:
+        """Role-routed model when a RoleRouter is wired; plain LLMs (tests,
+        single-model setups) serve every role themselves."""
+        for_role = getattr(self.llm, "for_role", None)
+        return for_role(role) if for_role else self.llm
 
     def _min_cluster_size(self, n_notes: int) -> int:
         if self.min_cluster_size is not None:
             return self.min_cluster_size
         return scaled_min_cluster_size(n_notes)
 
-    def refresh(self, user_id: str, now: datetime | None = None) -> None:
-        self._distill_new(user_id)
+    def refresh(self, user_id: str, now: datetime | None = None) -> dict:
+        """Run the pipeline; return run stats (also persisted to meta) so the
+        CLI/MCP/dashboard can show when a stage degraded instead of staying
+        silent (issue #2)."""
+        import json
+        now = now or datetime.now(timezone.utc)
+        stats: dict = {"at": now.isoformat(), "retry_at": None}
+        stats["distill"] = self._distill_new(user_id, stats)
         self._embed_new(user_id)
-        self._rebuild_themes(user_id, now or datetime.now(timezone.utc))
+        stats["themes"] = self._rebuild_themes(user_id, now, stats)
         self._build_links(user_id)
+        d, t = stats["distill"], stats["themes"]
+        label_needed = t["built"] - t["label_cached"]
+        status_tried = t["status_ok"] + t["status_heuristic"] + t["status_error"]
+        stats["degraded"] = bool(
+            (d["cold"] and d["todo"] and not (d["ok"] + d["zero_note"]))
+            or (label_needed and not t["label_llm"])
+            or (status_tried and not t["status_ok"]))
+        self.repo.set_meta("last_refresh", json.dumps(stats))
+        return stats
 
     class _RepoCache:
         def __init__(self, repo):
@@ -51,7 +96,8 @@ class Engine:
 
     MAX_CONSECUTIVE_FAILURES = 5
 
-    def _distill_new(self, user_id: str) -> None:
+    def _distill_new(self, user_id: str, stats: dict | None = None) -> dict:
+        stats = stats if stats is not None else {}
         # union: marker table is authoritative; notes-derived set backfills
         # sessions distilled before the marker existed. Both version-aware:
         # a PIPELINE_VERSION bump re-distills older material.
@@ -59,12 +105,23 @@ class Engine:
         done = self.repo.distilled_session_ids(user_id) | \
             self.repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
         todo = [s for s in self.repo.list_sessions(user_id) if s.id not in done]
+        d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0, "cold": False}
         consecutive = 0
         for n, s in enumerate(todo, 1):
             try:
                 self.repo.upsert_notes(self.distiller.distill(s))
                 self.repo.mark_distilled(user_id, s.id)   # zero notes counts as done
                 consecutive = 0
+                d["ok"] += 1
+            except LLMUnavailable as e:
+                # every candidate model is cooling — remaining sessions would
+                # fail identically. Stop now; the marker table makes this
+                # perfectly resumable on the next refresh.
+                d["cold"] = True
+                stats["retry_at"] = _iso_ts(e.cooldown_until)
+                log.warning("distill paused (%s); %d/%d sessions done — "
+                            "re-run refresh to resume", e, n - 1, len(todo))
+                break
             except Exception as e:
                 if "json_validate_failed" in str(e):
                     # content hijacked the extractor (meta/judge transcripts):
@@ -73,8 +130,10 @@ class Engine:
                              "marking as zero-note session", s.id)
                     self.repo.mark_distilled(user_id, s.id)
                     consecutive = 0
+                    d["zero_note"] += 1
                     continue
                 consecutive += 1
+                d["failed"] += 1
                 log.warning("distill failed for %s (%s) [%d consecutive]",
                             s.id, e, consecutive)
                 if consecutive >= self.MAX_CONSECUTIVE_FAILURES:
@@ -84,6 +143,7 @@ class Engine:
                     break
             if n % 50 == 0:
                 log.info("distill progress: %d/%d sessions", n, len(todo))
+        return d
 
     def _embed_new(self, user_id: str) -> None:
         have = self.repo.note_ids_with_embeddings(user_id)
@@ -94,12 +154,17 @@ class Engine:
         for n, v in zip(todo, vecs):
             self.repo.set_embedding(user_id, n.id, v)
 
-    def _rebuild_themes(self, user_id: str, now: datetime) -> None:
+    def _rebuild_themes(self, user_id: str, now: datetime,
+                        stats: dict | None = None) -> dict:
+        stats = stats if stats is not None else {}
+        t = {"built": 0, "label_cached": 0, "label_llm": 0, "label_fallback": 0,
+             "status_ok": 0, "status_heuristic": 0, "status_error": 0,
+             "status_na": 0}
         notes = {n.id: n for n in self.repo.get_notes(user_id)}
         ids, mat = self.repo.all_embeddings(user_id)
         if not ids:
             self.repo.replace_themes(user_id, [])
-            return
+            return t
         labels = cluster([list(row) for row in mat], self._min_cluster_size(len(ids)))
         groups: dict[int, list[str]] = defaultdict(list)
         for nid, lab in zip(ids, labels):
@@ -115,14 +180,20 @@ class Engine:
             cached = self.repo.get_label_cache(user_id, content_key)
             if cached:
                 label, summary = cached
+                t["label_cached"] += 1
             else:
                 try:
-                    label, summary = label_cluster(self.llm, members)
+                    label, summary = label_cluster(self._llm_for("label"), members)
                     self.repo.set_label_cache(user_id, content_key, label, summary)
+                    t["label_llm"] += 1
+                except LLMUnavailable as e:
+                    stats["retry_at"] = _iso_ts(e.cooldown_until)
+                    label, summary = _fallback_label(members), ""
+                    t["label_fallback"] += 1      # NOT cached: retried next refresh
                 except Exception as e:
                     log.warning("label failed for cluster %s (%s)", lab, e)
-                    # fallback NOT cached: retried on the next refresh
-                    label, summary = members[0].text[:40] if members else "Untitled", ""
+                    label, summary = _fallback_label(members), ""
+                    t["label_fallback"] += 1      # NOT cached: retried next refresh
             sids = {m.session_id for m in members}
             sources = {m.session_id.split(":", 1)[0] for m in members}
             times = [m.created_at for m in members if m.created_at]
@@ -132,13 +203,23 @@ class Engine:
                 last_seen=max(times) if times else None,
                 session_count=len(sids), source_count=len(sources))
             try:
-                theme.status = classify_status(user_id, theme, notes, self.llm,
-                                               cache, now=now)
+                theme.status = classify_status(user_id, theme, notes,
+                                               self._llm_for("status"), cache, now=now)
+                t["status_ok" if theme.status != "unknown" else "status_na"] += 1
+            except LLMUnavailable as e:
+                # recurring theme, LLM cooling: heuristic keeps the lens alive;
+                # uncached, so the classifier upgrades it on a later refresh
+                stats["retry_at"] = _iso_ts(e.cooldown_until)
+                theme.status = _heuristic_status(theme, now)
+                t["status_heuristic"] += 1
             except Exception as e:
                 log.warning("status classification failed for %s (%s)", label, e)
                 theme.status = "unknown"
+                t["status_error"] += 1
             themes.append(theme)
+        t["built"] = len(themes)
         self.repo.replace_themes(user_id, themes)
+        return t
 
     def _build_links(self, user_id: str) -> None:
         notes = {n.id: n for n in self.repo.get_notes(user_id)}
@@ -185,7 +266,8 @@ class Engine:
         if not a or not b:
             return None
         try:
-            result = self.llm.complete_json(self._WHY_SYSTEM, f"A: {a.text}\nB: {b.text}")
+            result = self._llm_for("why").complete_json(
+                self._WHY_SYSTEM, f"A: {a.text}\nB: {b.text}")
             why = result.get("why") if isinstance(result, dict) else None
         except Exception:
             return None                                   # degrade: show edge without why

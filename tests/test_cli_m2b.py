@@ -22,7 +22,7 @@ def _mk_fork_root(tmp_path):
 
 
 def test_ingest_cursor_source(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "m2b.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "m2b.db"))
     r = runner.invoke(app, ["ingest", "--source", "cursor",
                             "--path", _mk_fork_root(tmp_path)])
     assert r.exit_code == 0, r.output
@@ -32,12 +32,12 @@ def test_ingest_cursor_source(tmp_path, monkeypatch):
 
 
 def test_ingest_chatgpt_export_requires_path(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "m2b.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "m2b.db"))
     r = runner.invoke(app, ["ingest", "--source", "chatgpt-export"])
     assert r.exit_code != 0                      # --path mandatory for exports
 
 
 def test_unknown_source_still_rejected(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "m2b.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "m2b.db"))
     r = runner.invoke(app, ["ingest", "--source", "nope", "--path", "."])
     assert r.exit_code != 0

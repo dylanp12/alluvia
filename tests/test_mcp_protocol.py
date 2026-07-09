@@ -3,7 +3,7 @@ import pytest
 
 
 def test_tools_register_over_inmemory_transport(repo, monkeypatch, tmp_path):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "mcp.db"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "mcp.db"))
     mem = pytest.importorskip("mcp.shared.memory")
     from alluvia.mcp_server import build_server
 

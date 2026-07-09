@@ -6,8 +6,8 @@ runner = CliRunner()
 
 
 def test_init_detects_writes_config_and_declines_ingest(tmp_path, monkeypatch):
-    monkeypatch.setenv("SIFT_DB", str(tmp_path / "i.db"))
-    monkeypatch.setenv("SIFT_CONFIG", str(tmp_path / "config.toml"))
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "i.db"))
+    monkeypatch.setenv("ALLUVIA_CONFIG", str(tmp_path / "config.toml"))
     config.reset_toml_cache()
     # fake a claude-code root with one session file
     cc = tmp_path / "projects"
