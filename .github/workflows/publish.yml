@@ -13,7 +13,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v8
+      - uses: astral-sh/setup-uv@v8.3.2   # exact tag: setup-uv publishes no floating major alias
       - run: uv python install 3.13
       - run: uv build
       - run: uv publish
