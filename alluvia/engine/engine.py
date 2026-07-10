@@ -11,6 +11,7 @@ def scaled_min_cluster_size(n_notes: int) -> int:
     return max(2, min(8, n_notes // 400))
 from alluvia.llm.client import LLM
 from alluvia.llm.governor import LLMUnavailable
+from alluvia.progress import NullReporter
 from alluvia.engine.embed import Embedder
 from alluvia.engine.cluster import cluster
 from alluvia.engine.label import label_cluster
@@ -65,17 +66,22 @@ class Engine:
             return self.min_cluster_size
         return scaled_min_cluster_size(n_notes)
 
-    def refresh(self, user_id: str, now: datetime | None = None) -> dict:
+    def refresh(self, user_id: str, now: datetime | None = None,
+                reporter=None) -> dict:
         """Run the pipeline; return run stats (also persisted to meta) so the
         CLI/MCP/dashboard can show when a stage degraded instead of staying
-        silent (issue #2)."""
+        silent (issue #2). `reporter` (issue #4) receives stage progress;
+        default is silent."""
         import json
+        rep = reporter or NullReporter()
         now = now or datetime.now(timezone.utc)
         stats: dict = {"at": now.isoformat(), "retry_at": None}
-        stats["distill"] = self._distill_new(user_id, stats)
-        self._embed_new(user_id)
-        stats["themes"] = self._rebuild_themes(user_id, now, stats)
+        stats["distill"] = self._distill_new(user_id, stats, reporter=rep)
+        self._embed_new(user_id, reporter=rep)
+        stats["themes"] = self._rebuild_themes(user_id, now, stats, reporter=rep)
+        rep.start("linking ideas across themes")
         self._build_links(user_id)
+        rep.finish()
         d, t = stats["distill"], stats["themes"]
         label_needed = t["built"] - t["label_cached"]
         status_tried = t["status_ok"] + t["status_heuristic"] + t["status_error"]
@@ -96,8 +102,10 @@ class Engine:
 
     MAX_CONSECUTIVE_FAILURES = 5
 
-    def _distill_new(self, user_id: str, stats: dict | None = None) -> dict:
+    def _distill_new(self, user_id: str, stats: dict | None = None,
+                     reporter=None) -> dict:
         stats = stats if stats is not None else {}
+        rep = reporter or NullReporter()
         # union: marker table is authoritative; notes-derived set backfills
         # sessions distilled before the marker existed. Both version-aware:
         # a PIPELINE_VERSION bump re-distills older material.
@@ -106,8 +114,11 @@ class Engine:
             self.repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
         todo = [s for s in self.repo.list_sessions(user_id) if s.id not in done]
         d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0, "cold": False}
+        if todo:
+            rep.start("distilling sessions", total=len(todo))
         consecutive = 0
         for n, s in enumerate(todo, 1):
+            rep.advance()
             try:
                 self.repo.upsert_notes(self.distiller.distill(s))
                 self.repo.mark_distilled(user_id, s.id)   # zero notes counts as done
@@ -119,6 +130,8 @@ class Engine:
                 # perfectly resumable on the next refresh.
                 d["cold"] = True
                 stats["retry_at"] = _iso_ts(e.cooldown_until)
+                rep.note("provider rate-limited — pausing distill "
+                         "(resumes on the next refresh)")
                 log.warning("distill paused (%s); %d/%d sessions done — "
                             "re-run refresh to resume", e, n - 1, len(todo))
                 break
@@ -143,20 +156,32 @@ class Engine:
                     break
             if n % 50 == 0:
                 log.info("distill progress: %d/%d sessions", n, len(todo))
+        rep.finish()
         return d
 
-    def _embed_new(self, user_id: str) -> None:
+    EMBED_BATCH = 32     # batched so progress moves (and memory stays flat)
+
+    def _embed_new(self, user_id: str, reporter=None) -> None:
+        rep = reporter or NullReporter()
         have = self.repo.note_ids_with_embeddings(user_id)
         todo = [n for n in self.repo.get_notes(user_id) if n.id not in have]
         if not todo:
             return
-        vecs = self.embedder.embed([n.text for n in todo])
-        for n, v in zip(todo, vecs):
-            self.repo.set_embedding(user_id, n.id, v)
+        rep.start("embedding locally", total=len(todo))
+        rep.note("embeddings are computed on-device; the very first run "
+                 "downloads a small model")
+        for i in range(0, len(todo), self.EMBED_BATCH):
+            chunk = todo[i:i + self.EMBED_BATCH]
+            vecs = self.embedder.embed([n.text for n in chunk])
+            for n, v in zip(chunk, vecs):
+                self.repo.set_embedding(user_id, n.id, v)
+            rep.advance(len(chunk))
+        rep.finish()
 
     def _rebuild_themes(self, user_id: str, now: datetime,
-                        stats: dict | None = None) -> dict:
+                        stats: dict | None = None, reporter=None) -> dict:
         stats = stats if stats is not None else {}
+        rep = reporter or NullReporter()
         t = {"built": 0, "label_cached": 0, "label_llm": 0, "label_fallback": 0,
              "status_ok": 0, "status_heuristic": 0, "status_error": 0,
              "status_na": 0}
@@ -173,7 +198,10 @@ class Engine:
         cache = Engine._RepoCache(self.repo)
         themes: list[Theme] = []
         from alluvia.engine.track import _status_hash
+        if groups:
+            rep.start("mapping themes (label + status)", total=len(groups))
         for lab, note_ids in sorted(groups.items()):
+            rep.advance()
             members = [notes[i] for i in note_ids if i in notes]
             probe = Theme(id="", user_id=user_id, label="", summary="", note_ids=note_ids)
             content_key = _status_hash(probe, notes)
@@ -217,6 +245,7 @@ class Engine:
                 theme.status = "unknown"
                 t["status_error"] += 1
             themes.append(theme)
+        rep.finish()
         t["built"] = len(themes)
         self.repo.replace_themes(user_id, themes)
         return t

@@ -122,7 +122,7 @@ class Governor:
 
     def __init__(self, provider: str, candidates: list[tuple[str, object]],
                  store=None, clock=time.time, sleeper=time.sleep,
-                 patience: float | None = None, rungs=RUNGS):
+                 patience: float | None = None, rungs=RUNGS, on_wait=None):
         if not candidates:
             raise ValueError("governor needs at least one (model, adapter)")
         self.provider = provider
@@ -132,6 +132,15 @@ class Governor:
         self.sleeper = sleeper
         self.patience = DEFAULT_PATIENCE if patience is None else float(patience)
         self.rungs = tuple(rungs)
+        self.on_wait = on_wait       # callable(model, seconds): a deliberate
+        #                              wait must never look like a hang
+
+    _NOTIFY_WAIT = 2.0               # don't narrate sub-2s sleeps
+
+    def _wait(self, model: str, seconds: float) -> None:
+        if self.on_wait and seconds >= self._NOTIFY_WAIT:
+            self.on_wait(model, seconds)
+        self.sleeper(seconds)
 
     @property
     def model(self) -> str:
@@ -150,13 +159,13 @@ class Governor:
         return [{"model": m, "provider": self.provider, **self._load(m)}
                 for m, _ in self.candidates]
 
-    def _pace(self, st: dict) -> None:
+    def _pace(self, model: str, st: dict) -> None:
         if not st["est_rate"] or not st["last_call"]:
             return
         due = st["last_call"] + 1.0 / st["est_rate"]
         wait = due - self.clock()
         if wait > 0:
-            self.sleeper(min(wait, _PACE_CAP))
+            self._wait(model, min(wait, _PACE_CAP))
 
     def complete_json(self, system: str, user: str):
         budget = self.patience
@@ -170,7 +179,7 @@ class Governor:
                 continue
             server_tries = 0
             while True:                                    # CLOSED (or half-open probe)
-                self._pace(st)
+                self._pace(model, st)
                 st["last_call"] = self.clock()
                 try:
                     result = adapter.complete_json(system, user)
@@ -185,7 +194,7 @@ class Governor:
                             wait = min(_SERVER_WAITS[server_tries], budget)
                             server_tries += 1
                             budget -= wait
-                            self.sleeper(wait)
+                            self._wait(model, wait)
                             continue
                         last_exc = exc
                         self._save(model, st)
@@ -202,7 +211,7 @@ class Governor:
                     if wait <= budget:
                         budget -= wait
                         self._save(model, st)
-                        self.sleeper(wait)
+                        self._wait(model, wait)
                         continue
                     st["cooldown_until"] = self.clock() + wait   # can't afford: OPEN
                     self._save(model, st)

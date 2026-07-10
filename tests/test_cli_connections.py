@@ -28,7 +28,7 @@ def test_connections_shows_edge_and_fills_why(tmp_path, monkeypatch):
         from_note_id="note:a", to_note_id="note:b", from_theme_id="t0", to_theme_id="t1",
         kind="cross_source_surprise", weight=0.9, why=None)])
 
-    def fake_build_engine(r):
+    def fake_build_engine(r, reporter=None):
         from alluvia.engine.engine import Engine
         return Engine(r, _Emb(), FakeLLM([{"why": "both about auth"}]))
     monkeypatch.setattr(cli, "build_engine", fake_build_engine)

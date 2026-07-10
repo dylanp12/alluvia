@@ -23,7 +23,7 @@ def test_refresh_and_themes(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "m1.db"))
     monkeypatch.setattr(cli, "EMBED_DIM", 8)
 
-    def fake_build_engine(repo):
+    def fake_build_engine(repo, reporter=None):
         from alluvia.engine.engine import Engine
         llm = FakeLLM([
             {"notes": [{"kind": "idea", "text": "auth token service", "span": "msg:0"}]},

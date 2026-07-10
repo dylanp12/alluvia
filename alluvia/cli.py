@@ -12,21 +12,44 @@ app = typer.Typer(help="alluvia — mine your cross-harness AI history")
 EMBED_DIM = 384
 
 
+def _version_callback(value: bool):
+    if value:
+        from importlib.metadata import PackageNotFoundError, version
+        try:
+            v = version("alluvia")
+        except PackageNotFoundError:
+            v = "dev"
+        typer.echo(f"alluvia {v}")
+        raise typer.Exit()
+
+
+@app.callback()
+def _main(
+    version: bool = typer.Option(False, "--version", callback=_version_callback,
+                                 is_eager=True, help="Show version and exit."),
+):
+    pass
+
+
 def _repo() -> Repo:
     conn = connect(config.db_path())
     init_schema(conn, embed_dim=EMBED_DIM)
     return Repo(conn)
 
 
-def build_engine(repo: Repo):
+def build_engine(repo: Repo, reporter=None):
     from alluvia.engine.engine import Engine
     from alluvia.engine.embed import FastEmbedEmbedder
     from alluvia.llm.client import RoleRouter
     from alluvia.store.repo import LLMHealthStore
     # role-routed models, governed with SQLite-persisted breaker state: a
     # short-lived CLI run respects cooldowns learned by previous runs
+    on_wait = None
+    if reporter is not None:
+        def on_wait(model, seconds):
+            reporter.note(f"rate-limited: waiting {int(seconds)}s ({model})")
     return Engine(repo, FastEmbedEmbedder(),
-                  RoleRouter(health=LLMHealthStore(repo)),
+                  RoleRouter(health=LLMHealthStore(repo), on_wait=on_wait),
                   min_cluster_size=config.min_cluster())
 
 
@@ -54,12 +77,19 @@ def ingest(
         adapter = ChatGPTExportAdapter(path, user_id=config.DEFAULT_USER)
     else:
         raise typer.BadParameter(f"unknown source: {source}")
+    from alluvia.progress import make_reporter
+    rep = make_reporter()
     n_new = 0
     total = 0
-    for s in adapter.read():
-        total += 1
-        if repo.upsert_session(s):
-            n_new += 1
+    try:
+        rep.start(f"ingesting {source}")
+        for s in adapter.read():
+            total += 1
+            rep.advance()
+            if repo.upsert_session(s):
+                n_new += 1
+    finally:
+        rep.close()
     typer.echo(f"ingested {total} session(s), {n_new} new/changed")
 
 
@@ -117,8 +147,14 @@ def _maybe_degraded_hint(repo) -> None:
 
 @app.command()
 def refresh():
+    from alluvia.progress import make_reporter
     repo = _repo()
-    stats = build_engine(repo).refresh(config.DEFAULT_USER)
+    rep = make_reporter()
+    try:
+        stats = build_engine(repo, reporter=rep).refresh(config.DEFAULT_USER,
+                                                         reporter=rep)
+    finally:
+        rep.close()
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
     if isinstance(stats, dict):
         _echo_refresh_summary(stats)
@@ -394,8 +430,14 @@ def init():
             _do_ingest(source, root)
         if typer.confirm("Run first refresh now? (LLM calls — free tiers pace slowly)",
                          default=False):
+            from alluvia.progress import make_reporter
             repo = _repo()
-            build_engine(repo).refresh(config.DEFAULT_USER)
+            rep = make_reporter()
+            try:
+                build_engine(repo, reporter=rep).refresh(config.DEFAULT_USER,
+                                                         reporter=rep)
+            finally:
+                rep.close()
             typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
 
     typer.echo("\nNext steps:")

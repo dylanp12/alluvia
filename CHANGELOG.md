@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.2 — 2026-07-09
+
+You can now see what alluvia is doing (#4). Long stages used to run silently and
+look hung — worst of all a first `refresh`, which downloads the local
+embedding model with no output at all.
+
+- **Live progress everywhere it was silent** — `refresh` shows each stage
+  (distilling N sessions, embedding, mapping themes, linking) with rich
+  progress bars on a terminal and plain line output when piped or in CI.
+  `ingest` shows a running session count.
+- **Deliberate waits are narrated** — when the governor waits out a rate
+  limit it says so (`⏳ rate-limited: waiting 30s (model)`) instead of
+  freezing; the first-run embedding-model download announces itself.
+- Embeddings run in batches so progress moves (and memory stays flat).
+- `alluvia --version`.
+- Issue templates (bug report asks exactly for the refresh summary and
+  version; feature template fits both small asks and full RFCs) and a PR
+  template with a test-first checklist.
+- MCP tools, library callers, and the test suite see zero new output —
+  progress is CLI-only by construction.
+
 ## 0.1.1 — 2026-07-09
 
 Resilience release: provider rate limits no longer darken the map (#1, #2, #3).

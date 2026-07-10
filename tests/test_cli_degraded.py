@@ -27,7 +27,7 @@ def _engine_factory(llm):
     from tests.test_cli_m1 import ScriptedEmbedder
     from alluvia.engine.engine import Engine
 
-    def build(repo):
+    def build(repo, reporter=None):
         return Engine(repo, ScriptedEmbedder(), llm, min_cluster_size=2)
     return build
 

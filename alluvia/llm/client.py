@@ -100,7 +100,7 @@ def _default_health():
     return _process_health
 
 
-def make_llm(role: str | None = None, health=None) -> LLM:
+def make_llm(role: str | None = None, health=None, on_wait=None) -> LLM:
     """Role-aware factory: ALLUVIA_LLM_MODEL_<ROLE> -> ALLUVIA_LLM_MODEL -> provider
     default, expanded to the role's fallthrough chain and wrapped in a
     Governor (backoff, per-model breakers, chain fallthrough — see
@@ -114,21 +114,25 @@ def make_llm(role: str | None = None, health=None) -> LLM:
                   for m in config.llm_chain(provider, role)]
     return Governor(provider, candidates,
                     store=health if health is not None else _default_health(),
-                    patience=config.llm_patience())
+                    patience=config.llm_patience(), on_wait=on_wait)
 
 
 class RoleRouter:
     """Lazy per-role LLMs behind one object. The engine asks `for_role(...)` at
     each call site; plain LLMs (tests, single-model setups) skip the router."""
 
-    def __init__(self, build=make_llm, health=None):
+    def __init__(self, build=make_llm, health=None, on_wait=None):
         self._build = build
         self._health = health
+        self._on_wait = on_wait
         self._cache: dict[str | None, LLM] = {}
 
     def for_role(self, role: str | None) -> LLM:
         if role not in self._cache:
-            self._cache[role] = self._build(role=role, health=self._health)
+            kwargs = {"role": role, "health": self._health}
+            if self._on_wait is not None:
+                kwargs["on_wait"] = self._on_wait
+            self._cache[role] = self._build(**kwargs)
         return self._cache[role]
 
     def complete_json(self, system: str, user: str) -> Any:
