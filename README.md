@@ -95,6 +95,17 @@ claude mcp add alluvia -- uv run --directory <repo> alluvia mcp
 Eight tools let Claude Code / Cursor / any MCP client query your idea-map
 mid-conversation: *"you circled this in April — here's where you landed."*
 
+## Your machine, visible
+
+```bash
+alluvia status    # every path + size, store by data class, what's running
+alluvia doctor    # diagnoses the install and repairs what's safe to repair
+```
+
+Concurrent sessions are safe by design (WAL store, single-writer refresh
+lock), and any alluvia process can be killed at any instant — everything
+done so far is saved and resumes on the next run.
+
 ## What leaves your machine
 
 | Data | Where it goes |

@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.2.0 — 2026-07-12
+
+The good-citizen release: alluvia now runs concurrently, dies cleanly, shows
+you everything it keeps, and repairs itself (#5, #6, #7, #8).
+
+- **Concurrent sessions** (#5) — the store runs in WAL mode (readers never
+  block a running refresh; legacy stores upgrade transparently), refresh
+  takes a single-writer lock released by the OS on any process death
+  ("already running (pid N)" instead of double-spending your LLM budget),
+  and `serve` reuses an already-running dashboard or walks to a free port.
+- **Kill-anytime contract** (#5) — any alluvia process can be killed at any
+  instant with zero corruption and zero cleanup debt. SIGTERM behaves like
+  Ctrl-C; interrupting a refresh prints "paused — everything done so far is
+  saved" and resumes on the next run.
+- **`alluvia status`** (#6) — every path alluvia touches with sizes, the
+  store broken down by data class (raw = source of truth · derived =
+  rebuildable · judgments = yours), and what's live right now. `--json` for
+  scripting.
+- **`alluvia doctor`** (#7) — diagnoses the whole installation and applies
+  every safe repair automatically: WAL on legacy stores, schema migrations,
+  pruning orphaned derived rows, config permissions, stale digest flags,
+  impossible governor cooldowns. Raw data and judgments are never touched.
+  `--check` reports without repairing (exit 1 if repairs are needed),
+  `--live` proves your provider key with one tiny call, and
+  `--rebuild-derived` is the confirmed recovery lever that discards derived
+  data while raw sessions and your ratings survive.
+- **`--verbose` and `refresh --plan`** (#8) — see the pipeline and governor
+  think; preview exactly what a refresh would do (sessions pending, theme
+  work, cooldowns in effect) without spending a single LLM call.
+
 ## 0.1.2 — 2026-07-09
 
 You can now see what alluvia is doing (#4). Long stages used to run silently and

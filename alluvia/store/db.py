@@ -8,8 +8,13 @@ def connect(path: str) -> sqlite3.Connection:
         os.makedirs(os.path.dirname(path), exist_ok=True)
     # check_same_thread=False: the dashboard serves reads from handler threads.
     # SQLite serializes internally; our writes are short, single-user.
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=False, timeout=10.0)
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL: readers never block the writer, so refresh, the dashboard, and MCP
+    # servers can run concurrently. Persistent — legacy stores upgrade on
+    # first touch. busy_timeout covers the residual writer-writer waits.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA busy_timeout = 10000")
     return conn
 
 

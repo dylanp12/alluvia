@@ -8,6 +8,41 @@ resolution-markers = [
 ]
 
 [[package]]
+name = "alluvia"
+version = "0.2.0"
+source = { editable = "." }
+dependencies = [
+    { name = "anthropic" },
+    { name = "fastembed" },
+    { name = "hdbscan" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "openai" },
+    { name = "sqlite-vec" },
+    { name = "typer" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", specifier = ">=0.40" },
+    { name = "fastembed", specifier = ">=0.4" },
+    { name = "hdbscan", specifier = ">=0.8.40" },
+    { name = "mcp", specifier = ">=1.2" },
+    { name = "numpy", specifier = ">=2.0" },
+    { name = "openai", specifier = ">=1.40" },
+    { name = "sqlite-vec", specifier = ">=0.1.6" },
+    { name = "typer", specifier = ">=0.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
 name = "annotated-doc"
 version = "0.0.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1450,41 +1485,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
 ]
-
-[[package]]
-name = "alluvia"
-version = "0.1.2"
-source = { editable = "." }
-dependencies = [
-    { name = "anthropic" },
-    { name = "fastembed" },
-    { name = "hdbscan" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "openai" },
-    { name = "sqlite-vec" },
-    { name = "typer" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "anthropic", specifier = ">=0.40" },
-    { name = "fastembed", specifier = ">=0.4" },
-    { name = "hdbscan", specifier = ">=0.8.40" },
-    { name = "mcp", specifier = ">=1.2" },
-    { name = "numpy", specifier = ">=2.0" },
-    { name = "openai", specifier = ">=1.40" },
-    { name = "sqlite-vec", specifier = ">=0.1.6" },
-    { name = "typer", specifier = ">=0.12" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sniffio"

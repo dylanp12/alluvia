@@ -27,8 +27,14 @@ def _version_callback(value: bool):
 def _main(
     version: bool = typer.Option(False, "--version", callback=_version_callback,
                                  is_eager=True, help="Show version and exit."),
+    verbose: bool = typer.Option(False, "--verbose", "-v",
+                                 help="Show pipeline/governor activity on stderr."),
 ):
-    pass
+    if verbose:
+        import logging
+        import sys
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO,
+                            format="%(name)s \u00b7 %(message)s", force=True)
 
 
 def _repo() -> Repo:
@@ -104,6 +110,29 @@ def show(session_id: str):
         typer.echo(f"\n[{m.role}] {m.text}")
 
 
+def _refresh_plan(repo) -> None:
+    """No-spend preview of the next refresh."""
+    import time as _time
+    from datetime import datetime, timezone
+    from alluvia.engine.engine import pending_distill
+    todo = pending_distill(repo, config.DEFAULT_USER)
+    themes = repo.list_themes(config.DEFAULT_USER)
+    typer.echo(f"distill: {len(todo)} session(s) to distill")
+    typer.echo(f"themes:  {len(themes)} current \u00b7 re-labeled/re-classified "
+               f"only where content changed (caches skip the rest)")
+    from alluvia.inspect import model_cache_dir
+    import os as _os
+    if not (_os.path.isdir(model_cache_dir()) and any(_os.scandir(model_cache_dir()))):
+        typer.echo("note: first refresh downloads the local embedding model (~100 MB)")
+    cooling = [r for r in repo.llm_health_all()
+               if r["cooldown_until"] > _time.time()]
+    for r in cooling:
+        until = datetime.fromtimestamp(r["cooldown_until"], tz=timezone.utc)
+        typer.echo(f"\u23f3 {r['provider']}/{r['model']} cooling until {until:%H:%M} UTC "
+                   f"\u2014 refresh will use fallbacks or pause resumably")
+    typer.echo("(plan only \u2014 no LLM calls were made, nothing was written)")
+
+
 def _echo_refresh_summary(stats: dict) -> None:
     """Per-stage outcome of a refresh — a degraded map must never be
     indistinguishable from a healthy one."""
@@ -146,15 +175,37 @@ def _maybe_degraded_hint(repo) -> None:
 
 
 @app.command()
-def refresh():
+def refresh(
+    plan: bool = typer.Option(False, "--plan",
+                              help="Preview what a refresh would do — no LLM calls, no writes."),
+):
+    from alluvia.lockfile import acquire, holder_pid
     from alluvia.progress import make_reporter
+    if plan:
+        _refresh_plan(_repo())
+        return
+    lock_path = config.db_path() + ".refresh.lock"
+    lock = acquire(lock_path)
+    if lock is None:
+        # single-writer by design: a second refresh would only double-spend
+        # the LLM budget doing identical, idempotent work
+        typer.echo(f"another refresh is already running (pid {holder_pid(lock_path)}) "
+                   f"— exiting; the store stays consistent")
+        return
     repo = _repo()
     rep = make_reporter()
     try:
         stats = build_engine(repo, reporter=rep).refresh(config.DEFAULT_USER,
                                                          reporter=rep)
+    except KeyboardInterrupt:
+        # kill-anytime contract: everything committed so far is durable and
+        # every stage resumes from markers/caches on the next run
+        typer.echo("\npaused — everything done so far is saved; "
+                   "run `alluvia refresh` to resume")
+        raise typer.Exit(130)
     finally:
         rep.close()
+        lock.release()
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
     if isinstance(stats, dict):
         _echo_refresh_summary(stats)
@@ -557,23 +608,132 @@ def digest_keep(n: int):
     _act_on_item(n, "kept")
 
 
+def _sigterm(signum, frame):
+    raise KeyboardInterrupt               # reuse the clean Ctrl-C shutdown path
+
+
 @app.command()
 def serve(
-    port: int = typer.Option(8177, "--port"),
+    port: int = typer.Option(None, "--port",
+                             help="Exact port (default: 8177, walking upward if busy)"),
     open_browser: bool = typer.Option(False, "--open"),
 ):
     """Local dashboard: visualizations of your idea-map at http://localhost:<port>."""
-    from alluvia.web import serve as make_server
-    server = make_server(_repo(), config.DEFAULT_USER, port=port)
+    import signal
+    from alluvia.web import looks_like_alluvia, pick_port, serve as make_server
+    explicit = port is not None
+    want = port if explicit else 8177
+    if looks_like_alluvia(want):
+        url = f"http://127.0.0.1:{want}"
+        typer.echo(f"dashboard already running at {url}")
+        if open_browser:
+            import webbrowser
+            webbrowser.open(url)
+        return
+    if not explicit:
+        want = pick_port(want)
+    try:
+        server = make_server(_repo(), config.DEFAULT_USER, port=want)
+    except OSError as e:
+        typer.echo(f"cannot bind port {want}: {e}")
+        raise typer.Exit(1)
     url = f"http://127.0.0.1:{server.server_address[1]}"
     typer.echo(f"alluvia dashboard: {url}  (Ctrl-C to stop)")
     if open_browser:
         import webbrowser
         webbrowser.open(url)
+    signal.signal(signal.SIGTERM, _sigterm)   # docker/systemd stop == Ctrl-C
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+
+
+@app.command()
+def status(json_out: bool = typer.Option(False, "--json")):
+    """What alluvia keeps on this machine: paths, sizes, data classes,
+    and which processes are live right now."""
+    import json as _json
+    from alluvia.inspect import storage_report
+    rep = storage_report(_repo())
+    if json_out:
+        typer.echo(_json.dumps(rep, indent=2))
+        return
+
+    def _size(n):
+        for unit in ("B", "KB", "MB", "GB"):
+            if n < 1024 or unit == "GB":
+                return f"{n:.0f} {unit}" if unit == "B" else f"{n / 1:.1f} {unit}"
+            n /= 1024
+    typer.echo("paths:")
+    for name, e in rep["paths"].items():
+        mark = "" if e["exists"] else "  (absent)"
+        size = f"  {_size(e['bytes'])}" if e["exists"] else ""
+        mode = f"  mode {e['mode']}" if e.get("mode") else ""
+        typer.echo(f"  {name:13} {e['path']}{size}{mode}{mark}")
+    dc = rep["data_classes"]
+    typer.echo("store by data class:")
+    typer.echo(f"  raw        {dc['raw']['rows']:6} rows  {_size(dc['raw']['content_bytes'])}"
+               f"   (source of truth — never mutated)")
+    typer.echo(f"  derived    {dc['derived']['rows']:6} rows  {_size(dc['derived']['content_bytes'])}"
+               f"   (rebuildable from raw)")
+    typer.echo(f"  judgments  {dc['judgments']['rows']:6} rows  {_size(dc['judgments']['content_bytes'])}"
+               f"   (yours — never regenerated)")
+    live = rep["live"]
+    typer.echo("live:")
+    typer.echo(f"  refresh:   {'running (pid ' + str(live['refresh_lock_pid']) + ')' if live['refresh_lock_pid'] else 'not running'}")
+    typer.echo(f"  dashboard: {'http://127.0.0.1:' + str(live['dashboard_port']) if live['dashboard_port'] else 'not running'}")
+    typer.echo("nothing leaves this machine except LLM calls under your key "
+               "(secret-scrubbed) — see README \"What leaves your machine\"")
+
+
+_DOCTOR_ICONS = {"ok": "\u2713", "repaired": "\U0001f527", "warn": "\u26a0",
+                 "fail": "\u2717"}
+
+
+@app.command()
+def doctor(
+    check: bool = typer.Option(False, "--check",
+                               help="Report only — apply no repairs."),
+    live: bool = typer.Option(False, "--live",
+                              help="Also make one tiny LLM call to prove the key works."),
+    rebuild_derived: bool = typer.Option(False, "--rebuild-derived",
+                                         help="Discard ALL derived data for a clean rebuild "
+                                              "(raw + judgments survive)."),
+):
+    """Diagnose the installation and repair what is safe to repair.
+    Safe repairs never touch raw sessions or your judgments."""
+    from alluvia.doctor import rebuild_derived as _rebuild, run_doctor
+    repo = _repo()
+    if rebuild_derived:
+        typer.echo("this discards notes/themes/links/caches so the next refresh "
+                   "rebuilds them from raw — it will RE-SPEND LLM budget.")
+        typer.echo("raw sessions, your ratings/digests/mutes, and config survive.")
+        if not typer.confirm("proceed?", default=False):
+            raise typer.Exit(1)
+        counts = _rebuild(repo)
+        dropped = " · ".join(f"{k}: {v}" for k, v in counts.items() if v)
+        typer.echo(f"derived data cleared ({dropped or 'already empty'})")
+        typer.echo("run `alluvia refresh` to rebuild the map")
+        return
+    llm = None
+    if live:
+        from alluvia.llm.client import make_llm
+        from alluvia.store.repo import LLMHealthStore
+        llm = make_llm(role="status", health=LLMHealthStore(repo))
+    findings = run_doctor(repo, check_only=check, live=live, llm=llm)
+    for f in findings:
+        tag = "repaired \u2014 " if f.status == "repaired" else ""
+        line = f"{_DOCTOR_ICONS[f.status]} {f.name}: {tag}{f.detail}"
+        if f.remedy:
+            line += f"  \u2192 {f.remedy}"
+        typer.echo(line)
+    failed = any(f.status == "fail" for f in findings)
+    would_repair = check and any(f.repairable for f in findings)
+    if would_repair:
+        typer.echo("run `alluvia doctor` (without --check) to apply the repairs")
+    if failed or would_repair:
+        raise typer.Exit(1)
 
 
 @app.command()

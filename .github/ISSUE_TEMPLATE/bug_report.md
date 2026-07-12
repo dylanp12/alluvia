@@ -18,6 +18,7 @@ labels: bug
 ## Environment
 
 - `alluvia --version`:
+- `alluvia doctor --check` output:
 - OS:
 - LLM provider (groq/openai/anthropic):
 - If a `refresh` was involved: the per-stage summary it printed

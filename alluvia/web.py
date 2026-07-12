@@ -259,6 +259,30 @@ def make_handler(repo, user_id: str, embedder_factory=None):
     return Handler
 
 
+def looks_like_alluvia(port: int, timeout: float = 0.5) -> bool:
+    """True if something on 127.0.0.1:<port> answers /api/overview like us."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(
+                f"http://127.0.0.1:{port}/api/overview", timeout=timeout) as r:
+            return "themes" in json.loads(r.read().decode())
+    except Exception:
+        return False
+
+
+def pick_port(start: int, tries: int = 10) -> int:
+    """First bindable localhost port from `start`."""
+    import socket
+    for p in range(start, start + tries):
+        with socket.socket() as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    raise OSError(f"no free port in {start}-{start + tries - 1}")
+
+
 def serve(repo, user_id: str = None, port: int = 8177,
           embedder_factory=None) -> ThreadingHTTPServer:
     user_id = user_id or config.DEFAULT_USER

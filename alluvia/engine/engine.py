@@ -23,6 +23,17 @@ from alluvia.engine.link import compute_links
 from alluvia.engine.track import classify_status, STALE_DAYS
 
 
+def pending_distill(repo, user_id: str) -> list:
+    """Sessions still awaiting distillation. Union: the marker table is
+    authoritative; the notes-derived set backfills sessions distilled before
+    the marker existed. Both version-aware — a PIPELINE_VERSION bump
+    re-distills older material. Shared by refresh and `refresh --plan`."""
+    from alluvia.config import PIPELINE_VERSION
+    done = repo.distilled_session_ids(user_id) | \
+        repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
+    return [s for s in repo.list_sessions(user_id) if s.id not in done]
+
+
 def _iso_ts(unix_ts: float) -> str:
     return datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
 
@@ -106,13 +117,7 @@ class Engine:
                      reporter=None) -> dict:
         stats = stats if stats is not None else {}
         rep = reporter or NullReporter()
-        # union: marker table is authoritative; notes-derived set backfills
-        # sessions distilled before the marker existed. Both version-aware:
-        # a PIPELINE_VERSION bump re-distills older material.
-        from alluvia.config import PIPELINE_VERSION
-        done = self.repo.distilled_session_ids(user_id) | \
-            self.repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
-        todo = [s for s in self.repo.list_sessions(user_id) if s.id not in done]
+        todo = pending_distill(self.repo, user_id)
         d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0, "cold": False}
         if todo:
             rep.start("distilling sessions", total=len(todo))
