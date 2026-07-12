@@ -39,7 +39,8 @@ _RATE_CEIL = 2.0
 _PACE_CAP = 30.0
 
 _FRESH = {"cooldown_until": 0.0, "rung": 0, "consecutive": 0,
-          "est_rate": None, "last_success": 0.0, "last_call": 0.0}
+          "est_rate": None, "last_success": 0.0, "last_call": 0.0,
+          "calls": 0, "sent_bytes": 0, "recv_bytes": 0}
 
 
 class LLMUnavailable(Exception):
@@ -223,6 +224,17 @@ class Governor:
                 else:
                     st.update(rung=0, consecutive=0, cooldown_until=0.0,
                               last_success=self.clock())
+                    # network accounting: LLM calls are alluvia's only
+                    # traffic, so counting here covers all of it
+                    import json as _json
+                    st["calls"] = int(st.get("calls") or 0) + 1
+                    st["sent_bytes"] = int(st.get("sent_bytes") or 0) + \
+                        len(system.encode()) + len(user.encode())
+                    try:
+                        st["recv_bytes"] = int(st.get("recv_bytes") or 0) + \
+                            len(_json.dumps(result, default=str).encode())
+                    except (TypeError, ValueError):
+                        pass
                     if st["est_rate"]:
                         st["est_rate"] = min(st["est_rate"] + _RATE_STEP, _RATE_CEIL)
                     self._save(model, st)

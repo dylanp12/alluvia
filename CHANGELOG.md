@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.1 — 2026-07-12
+
+- **`alluvia top`** (#10) — live resource usage of every running alluvia
+  process: sampled CPU %, RAM, cumulative disk read/write, uptime, with a
+  machine context line. `--watch N` for a refreshing view; `status` shows
+  the same process list.
+- **Network accounting at the source** (#10) — per-process network bytes
+  aren't visible to unprivileged userland on any OS, and alluvia's only
+  traffic is its LLM calls — so the governor now counts them itself:
+  calls and bytes sent/received per model, persisted with the breaker
+  state and reported by `top`.
+- New dependency: psutil (cross-platform process metrics).
+
+
 ## 0.2.0 — 2026-07-12
 
 The good-citizen release: alluvia now runs concurrently, dies cleanly, shows

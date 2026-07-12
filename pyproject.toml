@@ -1,6 +1,6 @@
 [project]
 name = "alluvia"
-version = "0.2.0"
+version = "0.2.1"
 description = "Mine your AI conversations — every tool, every month — for the ideas you forgot you had. Local-first."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -23,6 +23,7 @@ dependencies = [
   "numpy>=2.0",
   "sqlite-vec>=0.1.6",
   "mcp>=1.2",
+  "psutil>=5.9",
 ]
 
 [project.scripts]

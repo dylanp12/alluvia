@@ -99,6 +99,7 @@ mid-conversation: *"you circled this in April — here's where you landed."*
 
 ```bash
 alluvia status    # every path + size, store by data class, what's running
+alluvia top       # live CPU/RAM/disk of alluvia processes + its LLM traffic
 alluvia doctor    # diagnoses the install and repairs what's safe to repair
 ```
 

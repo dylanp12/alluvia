@@ -153,6 +153,9 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             est_rate REAL,
             last_success REAL NOT NULL DEFAULT 0,
             last_call REAL NOT NULL DEFAULT 0,
+            calls INTEGER NOT NULL DEFAULT 0,
+            sent_bytes INTEGER NOT NULL DEFAULT 0,
+            recv_bytes INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (provider, model)
         );
         """
@@ -167,4 +170,9 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
     pcols = {r[1] for r in conn.execute("PRAGMA table_info(proposals)")}
     if "rated_via" not in pcols:
         conn.execute("ALTER TABLE proposals ADD COLUMN rated_via TEXT")
+    hcols = {r[1] for r in conn.execute("PRAGMA table_info(llm_health)")}
+    for col in ("calls", "sent_bytes", "recv_bytes"):
+        if col not in hcols:
+            conn.execute(f"ALTER TABLE llm_health ADD COLUMN {col} "
+                         f"INTEGER NOT NULL DEFAULT 0")
     conn.commit()

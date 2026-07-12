@@ -383,12 +383,14 @@ class Repo:
         self.conn.commit()
 
     _HEALTH_COLS = ("cooldown_until", "rung", "consecutive", "est_rate",
-                    "last_success", "last_call")
+                    "last_success", "last_call", "calls", "sent_bytes",
+                    "recv_bytes")
 
     def llm_health_load(self, provider: str, model: str) -> dict | None:
         r = self.conn.execute(
             "SELECT cooldown_until, rung, consecutive, est_rate, last_success, "
-            "last_call FROM llm_health WHERE provider=? AND model=?",
+            "last_call, calls, sent_bytes, recv_bytes "
+            "FROM llm_health WHERE provider=? AND model=?",
             (provider, model)).fetchone()
         return dict(zip(self._HEALTH_COLS, r)) if r else None
 
@@ -396,23 +398,29 @@ class Repo:
         vals = [state.get(c) for c in self._HEALTH_COLS]
         self.conn.execute(
             "INSERT INTO llm_health(provider, model, cooldown_until, rung, "
-            "consecutive, est_rate, last_success, last_call) "
+            "consecutive, est_rate, last_success, last_call, calls, "
+            "sent_bytes, recv_bytes) "
             "VALUES (?,?,COALESCE(?,0),COALESCE(?,0),COALESCE(?,0),?,"
-            "COALESCE(?,0),COALESCE(?,0)) "
+            "COALESCE(?,0),COALESCE(?,0),COALESCE(?,0),COALESCE(?,0),"
+            "COALESCE(?,0)) "
             "ON CONFLICT(provider, model) DO UPDATE SET "
             "cooldown_until=COALESCE(excluded.cooldown_until,0), "
             "rung=COALESCE(excluded.rung,0), "
             "consecutive=COALESCE(excluded.consecutive,0), "
             "est_rate=excluded.est_rate, "
             "last_success=COALESCE(excluded.last_success,0), "
-            "last_call=COALESCE(excluded.last_call,0)",
+            "last_call=COALESCE(excluded.last_call,0), "
+            "calls=COALESCE(excluded.calls,0), "
+            "sent_bytes=COALESCE(excluded.sent_bytes,0), "
+            "recv_bytes=COALESCE(excluded.recv_bytes,0)",
             (provider, model, *vals))
         self.conn.commit()
 
     def llm_health_all(self) -> list[dict]:
         rows = self.conn.execute(
             "SELECT provider, model, cooldown_until, rung, consecutive, "
-            "est_rate, last_success, last_call FROM llm_health").fetchall()
+            "est_rate, last_success, last_call, calls, sent_bytes, "
+            "recv_bytes FROM llm_health").fetchall()
         return [{"provider": r[0], "model": r[1],
                  **dict(zip(self._HEALTH_COLS, r[2:]))} for r in rows]
 

@@ -12,6 +12,15 @@ app = typer.Typer(help="alluvia — mine your cross-harness AI history")
 EMBED_DIM = 384
 
 
+def _fmt_bytes(n) -> str:
+    if n is None:
+        return "?"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.0f} B" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
+
 def _version_callback(value: bool):
     if value:
         from importlib.metadata import PackageNotFoundError, version
@@ -683,6 +692,13 @@ def status(json_out: bool = typer.Option(False, "--json")):
     typer.echo("live:")
     typer.echo(f"  refresh:   {'running (pid ' + str(live['refresh_lock_pid']) + ')' if live['refresh_lock_pid'] else 'not running'}")
     typer.echo(f"  dashboard: {'http://127.0.0.1:' + str(live['dashboard_port']) if live['dashboard_port'] else 'not running'}")
+    from alluvia.resources import snapshot as _snapshot
+    procs = _snapshot(sample_s=0.2)
+    if procs:
+        typer.echo("processes:")
+        for p in procs:
+            typer.echo(f"  pid {p['pid']} {p['role']}: {p['cpu_pct']}% cpu \u00b7 "
+                       f"{_fmt_bytes(p['rss_bytes'])} ram")
     typer.echo("nothing leaves this machine except LLM calls under your key "
                "(secret-scrubbed) — see README \"What leaves your machine\"")
 
@@ -734,6 +750,56 @@ def doctor(
         typer.echo("run `alluvia doctor` (without --check) to apply the repairs")
     if failed or would_repair:
         raise typer.Exit(1)
+
+
+@app.command()
+def top(
+    watch: float = typer.Option(None, "--watch",
+                                help="Refresh every N seconds (Ctrl-C to stop)."),
+):
+    """Live resource usage of running alluvia processes: CPU, RAM, disk I/O
+    — plus alluvia's own network accounting (LLM calls are its only traffic)."""
+    import time as _time
+    from alluvia.resources import llm_traffic, machine_context, snapshot
+    repo = _repo()
+
+    def render():
+        ctx = machine_context()
+        typer.echo(f"machine: {ctx['cpu_count']} cpus \u00b7 {ctx['cpu_pct']:.0f}% busy \u00b7 "
+                   f"mem {ctx['mem_used_pct']:.0f}% of {_fmt_bytes(ctx['mem_total_bytes'])}")
+        rows = snapshot()
+        if rows:
+            typer.echo(f"{'pid':>7}  {'role':<10} {'cpu%':>6} {'mem':>10} "
+                       f"{'disk r':>10} {'disk w':>10} {'uptime':>8}")
+            for r in rows:
+                up = f"{r['uptime_s'] // 3600}h{(r['uptime_s'] % 3600) // 60:02d}m" \
+                    if r["uptime_s"] >= 3600 else f"{r['uptime_s'] // 60}m{r['uptime_s'] % 60:02d}s"
+                typer.echo(f"{r['pid']:>7}  {r['role']:<10} {r['cpu_pct']:>6} "
+                           f"{_fmt_bytes(r['rss_bytes']):>10} "
+                           f"{_fmt_bytes(r['disk_read_bytes']):>10} "
+                           f"{_fmt_bytes(r['disk_write_bytes']):>10} {up:>8}")
+        else:
+            typer.echo("no alluvia processes running right now")
+        typer.echo("llm traffic (the only network alluvia uses):")
+        traffic = llm_traffic(repo)
+        if traffic:
+            for t in traffic:
+                typer.echo(f"  {t['provider']}/{t['model']}: {t['calls']} calls \u00b7 "
+                           f"{_fmt_bytes(t['sent_bytes'])} sent \u00b7 "
+                           f"{_fmt_bytes(t['recv_bytes'])} received")
+        else:
+            typer.echo("  none recorded yet")
+
+    if watch is None:
+        render()
+        return
+    try:
+        while True:
+            typer.echo("\x1b[2J\x1b[H", nl=False)
+            render()
+            _time.sleep(max(watch, 0.5))
+    except KeyboardInterrupt:
+        pass
 
 
 @app.command()
