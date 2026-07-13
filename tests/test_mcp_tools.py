@@ -79,7 +79,8 @@ def test_unfinished_and_show_source(repo):
     assert "error" in missing                                # error-as-value
 
 
-def test_propose_and_rate_via_mcp(repo):
+def test_propose_and_rate_via_mcp(repo, monkeypatch):
+    monkeypatch.setenv("ALLUVIA_MCP_WRITES", "1")   # writes are opt-in now
     _seed(repo)
     gen = FakeLLM([{"title": "Central scrubber", "proposal": "Build one scrub layer.",
                     "next_step": "Extract the filter.", "cites": ["note:a"]}])

@@ -197,7 +197,19 @@ def list_proposals_impl(deps, all: bool = False) -> dict:
         return {"error": str(e)}
 
 
+_WRITES_DISABLED = {"error": "writes disabled — this tool changes the user's "
+                    "data or spends their LLM budget. The user can enable it "
+                    "on their machine: [mcp] writes = true in config.toml, or "
+                    "ALLUVIA_MCP_WRITES=1. Do not retry without that."}
+
+
+def _writes_allowed() -> bool:
+    return config.mcp_writes_enabled()
+
+
 def propose_next_impl(deps, theme_id: str | None = None, limit: int = 3) -> dict:
+    if not _writes_allowed():
+        return dict(_WRITES_DISABLED)
     try:
         limit = _cap(limit)
         user = config.DEFAULT_USER
@@ -244,6 +256,8 @@ def get_digest_impl(deps) -> dict:
 
 def rate_proposal_impl(deps, proposal_id: str, verdict: str,
                        note: str | None = None) -> dict:
+    if not _writes_allowed():
+        return dict(_WRITES_DISABLED)
     try:
         if verdict not in ("keep", "dismiss"):
             return {"error": "verdict must be 'keep' or 'dismiss'"}
@@ -297,8 +311,9 @@ def build_server(deps: SiftDeps | None = None):
     @mcp.tool()
     def propose_next(theme_id: str | None = None, limit: int = 3) -> dict:
         """Generate NEW grounded proposals from the user's idea-map. This SPENDS
-        THE USER'S LLM BUDGET — call only when the user explicitly asks for
-        proposals."""
+        THE USER'S LLM BUDGET and is disabled unless the user opted in on
+        their machine ([mcp] writes = true in config.toml). Call only when
+        the user explicitly asks for proposals."""
         return propose_next_impl(d, theme_id=theme_id, limit=limit)
 
     @mcp.tool()
@@ -312,7 +327,8 @@ def build_server(deps: SiftDeps | None = None):
     def rate_proposal(proposal_id: str, verdict: str, note: str | None = None) -> dict:
         """Record the USER'S judgment on a proposal. Call ONLY to relay their
         explicit verbal verdict ('keep it' / 'dismiss that') — NEVER rate on your
-        own initiative. verdict: keep | dismiss."""
+        own initiative. Disabled unless the user opted in on their machine
+        ([mcp] writes = true). verdict: keep | dismiss."""
         return rate_proposal_impl(d, proposal_id=proposal_id, verdict=verdict,
                                   note=note)
 

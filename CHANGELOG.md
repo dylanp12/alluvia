@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — 2026-07-13
+
+The first five minutes, fixed — and MCP writes become opt-in.
+
+- **Newest sessions first** — distillation now always processes your most
+  recent sessions first, so the map is freshest where it matters.
+- **First-run cap** — the very first refresh distills your ~50 most recent
+  sessions and says so ("the remaining N backfill automatically on the next
+  refresh"). You see labeled themes, connections, and unfinished threads in
+  minutes instead of waiting out a full-history distill — and the label/
+  status stages keep budget headroom on day one. Tune or disable with
+  `ALLUVIA_FIRST_RUN_CAP` (0 turns it off). (#11-class first-run failures,
+  designed out.)
+- **MCP is read-only by default** (#12) — `rate_proposal` and `propose_next`
+  (the tools that write your judgments or spend your LLM budget) now return
+  a clear "disabled" message unless you opt in on your machine:
+  `[mcp] writes = true` in config.toml or `ALLUVIA_MCP_WRITES=1`. Surprise
+  writes are impossible, not merely detectable.
+- **Windows CI** (#13) — the platform detection that already claimed Windows
+  is now tested there.
+- Docs: SECURITY.md (private vulnerability reporting), CONTRIBUTING.md,
+  a ChatGPT-history import guide, and a README that says the quiet part
+  loudly: the whole product works end-to-end on a free-tier key.
+
+
 ## 0.2.2 — 2026-07-13
 
 Visual identity — **sediment & gold**. alluvia now looks like what it does: a

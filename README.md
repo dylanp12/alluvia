@@ -27,6 +27,10 @@ ChatGPT. Each tool remembers nothing about the others, and neither do you. The
 idea you need today is sitting in a session from last spring, in a different
 app, under a title you'll never search for. alluvia finds it.
 
+> *"I know I've already thought about this — resurface it inside the tool
+> I'm using now, with citations, without giving another cloud service my
+> raw history."* That sentence is the product.
+
 **Local-first memory for AI-assisted work — across tools, with provenance and
 human judgment.** Not another "AI memory": your raw sessions never leave the
 machine, every surfaced idea cites its source, and *you* rate what's gold.
@@ -121,7 +125,9 @@ done so far is saved and resumes on the next run.
 | Distill / label / propose calls | Your configured LLM provider, under your API key, secret-scrubbed first |
 | Telemetry | **There is none.** |
 
-Provider is your choice — Groq (free tier works), OpenAI, or Anthropic — with
+Provider is your choice — Groq, OpenAI, or Anthropic. **The whole product
+works end-to-end on Groq's free tier** — no card, no cloud account, a real
+trial on your real history where nothing leaves your machine — with
 per-role model overrides (`ALLUVIA_LLM_MODEL_PROPOSE=...` for a stronger
 generator, cheap models for bulk extraction).
 
@@ -147,6 +153,19 @@ Three data classes with different guarantees: **raw** (source of truth, never
 touched), **derived** (rebuildable from raw — improve the pipeline, re-run,
 nothing lost), **judgments** (your ratings and digests — durable, never
 regenerated).
+
+## Bring your ChatGPT history
+
+ChatGPT ingestion uses the official data export: ChatGPT → Settings → Data
+controls → Export data. When the ZIP arrives by email:
+
+```bash
+alluvia ingest --source chatgpt-export --path ~/Downloads/chatgpt-export.zip
+alluvia refresh
+```
+
+Your ChatGPT threads join the same map as Claude Code and Cursor — that's
+where the cross-tool bridges come from.
 
 ## Honest limits
 

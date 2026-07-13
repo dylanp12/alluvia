@@ -126,6 +126,15 @@ def provider_key(provider: str) -> str | None:
             or _toml().get("keys", {}).get(provider))
 
 
+def mcp_writes_enabled() -> bool:
+    """MCP write/spend tools (rate_proposal, propose_next) are opt-in: a
+    deliberate act on this machine, never an assistant's decision."""
+    env = os.environ.get("ALLUVIA_MCP_WRITES")
+    if env is not None:
+        return env not in ("", "0", "false", "False")
+    return bool(_toml().get("mcp", {}).get("writes", False))
+
+
 def digest_days() -> int:
     return int(os.environ.get("ALLUVIA_DIGEST_DAYS")
                or _toml().get("digest", {}).get("days")

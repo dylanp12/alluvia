@@ -24,14 +24,19 @@ from alluvia.engine.track import classify_status, STALE_DAYS
 
 
 def pending_distill(repo, user_id: str) -> list:
-    """Sessions still awaiting distillation. Union: the marker table is
-    authoritative; the notes-derived set backfills sessions distilled before
-    the marker existed. Both version-aware — a PIPELINE_VERSION bump
-    re-distills older material. Shared by refresh and `refresh --plan`."""
+    """Sessions still awaiting distillation, NEWEST FIRST (fresh sessions
+    carry the most recall value; undated ones sort last). Union: the marker
+    table is authoritative; the notes-derived set backfills sessions
+    distilled before the marker existed. Both version-aware — a
+    PIPELINE_VERSION bump re-distills older material. Shared by refresh and
+    `refresh --plan`."""
     from alluvia.config import PIPELINE_VERSION
     done = repo.distilled_session_ids(user_id) | \
         repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
-    return [s for s in repo.list_sessions(user_id) if s.id not in done]
+    todo = [s for s in repo.list_sessions(user_id) if s.id not in done]
+    return sorted(todo, key=lambda s: (
+        s.started_at is None,
+        -(to_utc(s.started_at).timestamp() if s.started_at else 0)))
 
 
 def _iso_ts(unix_ts: float) -> str:
@@ -112,13 +117,30 @@ class Engine:
             self.repo.set_status_cache(user_id, h, s)
 
     MAX_CONSECUTIVE_FAILURES = 5
+    FIRST_RUN_CAP = 50     # first-ever refresh distills this many newest
+    #                        sessions, then backfills — a stranger sees a
+    #                        living map in minutes, and label/status keep
+    #                        budget headroom on day one. 0 disables.
+
+    def _first_run_cap(self) -> int:
+        import os
+        raw = os.environ.get("ALLUVIA_FIRST_RUN_CAP")
+        return int(raw) if raw is not None else self.FIRST_RUN_CAP
 
     def _distill_new(self, user_id: str, stats: dict | None = None,
                      reporter=None) -> dict:
         stats = stats if stats is not None else {}
         rep = reporter or NullReporter()
         todo = pending_distill(self.repo, user_id)
-        d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0, "cold": False}
+        d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0,
+             "cold": False, "deferred": 0}
+        cap = self._first_run_cap()
+        if cap and len(todo) > cap and self.repo.get_meta("last_refresh") is None:
+            d["deferred"] = len(todo) - cap
+            todo = todo[:cap]
+            rep.note(f"first run: distilling your {cap} most recent sessions "
+                     f"— the remaining {d['deferred']} backfill automatically "
+                     f"on the next refresh")
         if todo:
             rep.start("distilling sessions", total=len(todo))
         consecutive = 0

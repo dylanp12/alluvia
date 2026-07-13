@@ -151,6 +151,9 @@ def _echo_refresh_summary(stats: dict) -> None:
         extras = [f"{d[k]} {w}" for k, w in
                   (("zero_note", "empty"), ("failed", "failed")) if d.get(k)]
         typer.echo(line + (f" ({', '.join(extras)})" if extras else ""))
+        if d.get("deferred"):
+            typer.echo(f"first run: newest sessions first — {d['deferred']} "
+                       f"more backfill on the next refresh")
     if t.get("built"):
         typer.echo(f"labels: {t.get('label_cached', 0)} cached · "
                    f"{t.get('label_llm', 0)} fresh · "
