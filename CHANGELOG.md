@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.2.2 — 2026-07-13
+
+Visual identity — **sediment & gold**. alluvia now looks like what it does: a
+patient field survey of your own thinking, with one scarce point of gold at the
+find.
+
+- **New mark & wordmark** — three tributaries converge at a gold node and
+  continue as one stem (it diagrams the product, and reads as a merge graph).
+  Lockup, wide/square marks, favicon, and a social-preview card live in
+  `assets/`; the README carries a dark/light-aware lockup.
+- **Dashboard reskin** — the `alluvia serve` dashboard moves onto the brand
+  palette (Ink/Basin/Paper/Wash/Silt/Gold), now **light- and dark-aware** instead
+  of dark-only, with IBM Plex Mono station labels and an inlined favicon. Zero
+  external requests, as before.
+- **Accessible by construction** — every theme status carries a labelled dot
+  (never colour alone), status and source palettes are contrast- and
+  colour-vision-validated on both grounds, and gold is a *filled mark* reserved
+  for the find/active state — never text on a light surface.
+- **Brand guide** — `docs/BRAND.md` documents the palette, the scarcity rule, the
+  ground-scoped token roles, and the voice.
+- No engine, CLI, MCP, or storage behaviour changed.
+
 ## 0.2.1 — 2026-07-12
 
 - **`alluvia top`** (#10) — live resource usage of every running alluvia

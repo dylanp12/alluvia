@@ -6,7 +6,7 @@ from alluvia.store.db import connect, init_schema
 from alluvia.store.repo import Repo
 from alluvia.ingest.claude_code import ClaudeCodeAdapter
 
-app = typer.Typer(help="alluvia — mine your cross-harness AI history")
+app = typer.Typer(help="alluvia — resurface ideas from across your AI history")
 
 # embeddings dim is fixed once the engine phase lands; 384 = bge-small default.
 EMBED_DIM = 384

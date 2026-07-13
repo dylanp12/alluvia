@@ -1,7 +1,7 @@
 [project]
 name = "alluvia"
-version = "0.2.1"
-description = "Mine your AI conversations — every tool, every month — for the ideas you forgot you had. Local-first."
+version = "0.2.2"
+description = "Resurface the ideas you forgot you had — across every AI tool, every month. Local-first, with provenance."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "Dylan Parent"}]

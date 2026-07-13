@@ -1,4 +1,11 @@
-<p align="center"><img src="assets/logo.svg" width="110" alt="Alluvia"></p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/alluvia-lockup-dark.svg">
+    <img src="assets/alluvia-lockup.svg" alt="alluvia" width="420">
+  </picture>
+</p>
+
+<p align="center"><em>Pan your AI history for gold.</em></p>
 
 <p align="center">
   <a href="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml"><img src="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
@@ -8,9 +15,7 @@
   <img src="https://img.shields.io/badge/local--first-always-d4a017" alt="local-first">
 </p>
 
-# Alluvia
-
-**Pan your AI history for gold.**
+# alluvia
 
 Every conversation you've ever had with an AI tool is sediment. Most of it is
 sand — but scattered through it are the nuggets: ideas you never chased,
