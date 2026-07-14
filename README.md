@@ -50,6 +50,10 @@ your present self is holding.
 
 ## Sixty seconds
 
+[![Watch the 60-second demo](assets/demo-poster.png)](https://github.com/dylanp12/alluvia/releases/download/v0.3.0/alluvia-demo.mp4)
+
+*(▶ 60-second demo — or watch it on [alluvia-three.vercel.app](https://alluvia-three.vercel.app))*
+
 ```bash
 uv tool install alluvia    # or: pip install alluvia
 alluvia init               # detects your sources, sets up your LLM provider
