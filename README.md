@@ -50,9 +50,9 @@ your present self is holding.
 
 ## Sixty seconds
 
-[![Watch the 60-second demo](assets/demo-poster.png)](https://github.com/dylanp12/alluvia/releases/download/v0.3.0/alluvia-demo.mp4)
+![alluvia finding a cross-tool bridge](https://github.com/dylanp12/alluvia/releases/download/v0.3.0/alluvia-demo.gif)
 
-*(▶ 60-second demo — or watch it on [alluvia-three.vercel.app](https://alluvia-three.vercel.app))*
+*([full 60-second demo](https://github.com/dylanp12/alluvia/releases/download/v0.3.0/alluvia-demo.mp4))*
 
 ```bash
 uv tool install alluvia    # or: pip install alluvia
