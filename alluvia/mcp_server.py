@@ -235,6 +235,31 @@ def propose_next_impl(deps, theme_id: str | None = None, limit: int = 3) -> dict
         return {"error": str(e)}
 
 
+def recall_now_impl(deps, problem: str, include_handoff: bool = True,
+                    limit: int = 5) -> dict:
+    """Read-only; never spends the user's LLM budget (retrieval only)."""
+    try:
+        from alluvia.recall import build_handoff, recall, recall_warnings
+        limit = _cap(limit)
+        hits = recall(deps.repo, deps.embedder, config.DEFAULT_USER,
+                      _t(problem, 300), limit=limit)
+        out = {
+            "summary": (f"found {len(hits)} prior thread(s) that likely matter"
+                        if hits else "no prior context surfaced"),
+            "hits": [{"kind": h.kind, "title": _t(h.title, 120),
+                      "summary": _t(h.summary), "why": _t(h.why, 250),
+                      "status": h.status, "sources": h.sources[:4],
+                      "cites": h.cites[:8], "git_ref": _t(h.git_ref, 160)}
+                     for h in hits],
+            "warnings": recall_warnings(deps.repo),
+        }
+        if include_handoff:
+            out["handoff"] = _t(build_handoff(problem, hits), 2400)
+        return out
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def get_digest_impl(deps) -> dict:
     try:
         import os
@@ -315,6 +340,16 @@ def build_server(deps: SiftDeps | None = None):
         their machine ([mcp] writes = true in config.toml). Call only when
         the user explicitly asks for proposals."""
         return propose_next_impl(d, theme_id=theme_id, limit=limit)
+
+    @mcp.tool()
+    def recall_now(problem: str, include_handoff: bool = True,
+                   limit: int = 5) -> dict:
+        """THE FRONT DOOR. When the user seems to be re-solving something —
+        or asks "have I dealt with this before?" — call this with the problem
+        in their words. Returns prior threads with citations, status, and a
+        ready-to-use handoff block. Read-only; spends nothing."""
+        return recall_now_impl(d, problem=problem,
+                               include_handoff=include_handoff, limit=limit)
 
     @mcp.tool()
     def get_digest() -> dict:

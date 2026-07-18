@@ -32,8 +32,9 @@ def _version_callback(value: bool):
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def _main(
+    ctx: typer.Context,
     version: bool = typer.Option(False, "--version", callback=_version_callback,
                                  is_eager=True, help="Show version and exit."),
     verbose: bool = typer.Option(False, "--verbose", "-v",
@@ -44,6 +45,43 @@ def _main(
         import sys
         logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                             format="%(name)s \u00b7 %(message)s", force=True)
+    if ctx.invoked_subcommand is None:
+        _now_view()
+
+
+def _now_view():
+    """Bare `alluvia`: the now-view — what's open, what bridged, what's next."""
+    import json as _json
+    repo = _repo()
+    themes = repo.list_themes(config.DEFAULT_USER)
+    if not themes and not repo.list_sessions(config.DEFAULT_USER):
+        typer.echo("alluvia — nothing here yet. start with: alluvia init")
+        return
+    open_loops = [t for t in themes if t.status in ("open", "dormant")][:3]
+    typer.echo(f"themes: {len(themes)}")
+    if open_loops:
+        typer.echo("open loops (unfinished):")
+        for t in open_loops:
+            typer.echo(f"  \U0001f9f5 {t.label}  [{t.status}] \u00b7 {t.session_count} sessions")
+    links = repo.list_links(config.DEFAULT_USER, limit=3)
+    if links:
+        notes = {n.id: n for n in repo.get_notes(config.DEFAULT_USER)}
+        typer.echo("freshest bridges:")
+        for l in links:
+            a, b = notes.get(l.from_note_id), notes.get(l.to_note_id)
+            if a and b:
+                typer.echo(f"  \U0001f517 {a.text[:52]} \u2194 {b.text[:52]}")
+    raw = repo.get_meta("last_refresh")
+    if raw:
+        try:
+            meta = _json.loads(raw)
+            state = "degraded \u2014 re-run refresh" if meta.get("degraded") else "healthy"
+            typer.echo(f"last refresh: {meta.get('at', '?')[:10]} \u00b7 {state}")
+        except ValueError:
+            pass
+    else:
+        typer.echo("no refresh yet \u2014 run `alluvia refresh`")
+    typer.echo("ask it something: alluvia recall \"<what you're working on>\" --handoff")
 
 
 def _repo() -> Repo:
@@ -71,7 +109,7 @@ def build_engine(repo: Repo, reporter=None):
 @app.command()
 def ingest(
     source: str = typer.Option("claude-code", "--source",
-                               help="claude-code | cursor | windsurf | antigravity | chatgpt-export"),
+                               help="claude-code | cursor | windsurf | antigravity | chatgpt-export | jsonl (docs/SOURCES.md)"),
     path: str = typer.Option(None, "--path",
                              help="Root/logs dir (claude-code), fork root override, "
                                   "or export ZIP/dir (chatgpt-export)"),
@@ -85,6 +123,11 @@ def ingest(
     elif source in ("cursor", "windsurf", "antigravity"):
         from alluvia.ingest.vscode_fork import VSCodeForkAdapter
         adapter = VSCodeForkAdapter(source, root=path, user_id=config.DEFAULT_USER)
+    elif source == "jsonl":
+        if not path:
+            raise typer.BadParameter("--path to a .jsonl file or directory is required")
+        from alluvia.ingest.jsonl_source import JsonlSourceAdapter
+        adapter = JsonlSourceAdapter(path, user_id=config.DEFAULT_USER)
     elif source == "chatgpt-export":
         if not path:
             raise typer.BadParameter("--path to the export ZIP/dir is required")
@@ -659,6 +702,104 @@ def serve(
         server.serve_forever()
     except KeyboardInterrupt:
         server.shutdown()
+
+
+def _recall_embedder():
+    from alluvia.engine.embed import FastEmbedEmbedder
+    return FastEmbedEmbedder()
+
+
+@app.command()
+def demo(clean: bool = typer.Option(False, "--clean",
+                                    help="Remove the demo store.")):
+    """See every lens in seconds on a tiny synthetic corpus — no API key,
+    no LLM calls, and never anywhere near your real store."""
+    import os as _os
+    from alluvia.demo_corpus import seed
+    from alluvia.store.db import connect, init_schema
+    demo_db = _os.path.expanduser("~/.alluvia/demo.db")
+    if clean:
+        for suffix in ("", "-wal", "-shm"):
+            try:
+                _os.remove(demo_db + suffix)
+            except OSError:
+                pass
+        typer.echo("demo store removed")
+        return
+    conn = connect(demo_db)
+    init_schema(conn, embed_dim=384)
+    repo = Repo(conn)
+    seed(repo)
+    notes = {n.id: n for n in repo.get_notes(config.DEFAULT_USER)}
+    typer.echo("— themes (your thinking, clustered) —")
+    for t in repo.list_themes(config.DEFAULT_USER):
+        typer.echo(f"\u2022 {t.label}  [{t.status}] \u00b7 {t.session_count} sessions/"
+                   f"{t.source_count} sources")
+    typer.echo("\n— connections (bridges across tools and months) —")
+    for l in repo.list_links(config.DEFAULT_USER, limit=2):
+        a, b = notes[l.from_note_id], notes[l.to_note_id]
+        typer.echo(f"\U0001f517 {a.text}")
+        typer.echo(f"   \u2194 {b.text}")
+        typer.echo(f"   why: {l.why}")
+    typer.echo("\n— unfinished (threads you keep circling) —")
+    for t in repo.list_themes(config.DEFAULT_USER):
+        if t.status == "open":
+            typer.echo(f"\U0001f9f5 {t.label} \u00b7 open across "
+                       f"{t.session_count} sessions")
+    typer.echo("\n— proposal (grounded next step, awaiting YOUR judgment) —")
+    for p in repo.list_proposals(config.DEFAULT_USER, outcomes=("pending",)):
+        typer.echo(f"[{p.id}] {p.title}  (feasibility {p.feasibility}/5)")
+        typer.echo(f"    {p.text}")
+        typer.echo(f"    cites: {', '.join(p.cites)}")
+    typer.echo("\nthis is synthetic data in its own store (~/.alluvia/demo.db).")
+    typer.echo(f"dashboard:  ALLUVIA_DB={demo_db} alluvia serve --open")
+    typer.echo("your turn:  alluvia init   (your real history, on your machine)")
+    typer.echo("remove:     alluvia demo --clean")
+
+
+@app.command()
+def recall(
+    query: str,
+    handoff: bool = typer.Option(False, "--handoff",
+                                 help="Emit a paste-ready context block for your current assistant."),
+    json_out: bool = typer.Option(False, "--json"),
+    limit: int = typer.Option(5, "--limit"),
+):
+    """The front door: what did I already figure out about this?
+    Cited, ranked, retrieval-only — zero LLM spend."""
+    import json as _json
+    import os as _os
+    from dataclasses import asdict
+    from alluvia.recall import build_handoff, recall as _recall, recall_warnings
+    repo = _repo()
+    git_root = "." if _os.path.isdir(".git") else None
+    hits = _recall(repo, _recall_embedder(), config.DEFAULT_USER, query,
+                   limit=limit, git_root=git_root)
+    warnings = recall_warnings(repo)
+    if json_out:
+        typer.echo(_json.dumps({"query": query, "hits": [asdict(h) for h in hits],
+                                "warnings": warnings}, indent=2))
+        return
+    if handoff:
+        typer.echo(build_handoff(query, hits))
+        for w in warnings:
+            typer.echo(f"\u26a0 {w}")
+        return
+    if not hits:
+        typer.echo("nothing surfaced — refreshed recently? try `alluvia refresh`")
+        return
+    for i, h in enumerate(hits, 1):
+        status = f"  [{h.status}]" if h.status else ""
+        span = f"  ({h.date_range})" if h.date_range else ""
+        typer.echo(f"{i}. {h.title}{status}{span}")
+        typer.echo(f"   {h.summary}")
+        typer.echo(f"   why: {h.why}")
+        if h.git_ref:
+            typer.echo(f"   {h.git_ref}")
+        typer.echo(f"   sources: {'; '.join(h.sources)}")
+    for w in warnings:
+        typer.echo(f"\u26a0 {w}")
+    typer.echo("\ntip: --handoff emits a block to paste into your assistant")
 
 
 @app.command()

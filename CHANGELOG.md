@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 — 2026-07-17
+
+Recall becomes the front door — and any source can feed it.
+
+- **`alluvia recall "<problem>"`** — the fastest path from "I know I solved
+  this before" to cited proof. Fuses your themes, bridges, and unfinished
+  threads into a few high-signal hits, each with sources and status.
+  Retrieval only — **zero LLM spend**. `--handoff` emits a paste-ready
+  context block for whatever assistant you're in; `--json` for scripting.
+- **MCP `recall_now`** — the same recall inside Claude Code / Cursor,
+  mid-conversation. Read-only; spends nothing. When git is present, recall
+  conservatively flags "possibly implemented in <commit>" by matching your
+  local history — a pointer to verify, never a claim.
+- **Bare `alluvia`** now prints a now-view: open loops, freshest bridges,
+  and whether a refresh is due.
+- **`alluvia demo`** — every lens alive in ~30 seconds on a tiny synthetic
+  corpus, with no API key and no LLM calls, in its own store (never your
+  real one). `--clean` removes it.
+- **A source contract** (#15) — anything that writes
+  [normalized-session JSONL](docs/SOURCES.md) is now a source:
+  `alluvia ingest --source jsonl --path <file|dir>`. Multi-machine history
+  without cloud, and formats we don't ship parsers for arrive normalized.
+- Internally, the sqlite-vec and numpy vector backends now return the same
+  cosine scores, so ranking is identical whichever is active.
+
+
 ## 0.3.0 — 2026-07-13
 
 The first five minutes, fixed — and MCP writes become opt-in.

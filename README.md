@@ -56,9 +56,10 @@ your present self is holding.
 
 ```bash
 uv tool install alluvia    # or: pip install alluvia
-alluvia init               # detects your sources, sets up your LLM provider
+alluvia demo               # see every lens in 30s — no API key, synthetic data
+alluvia init               # then: detect your sources, set up your provider
 alluvia refresh            # distill → embed → cluster → map (local embeddings)
-alluvia themes && alluvia serve --open
+alluvia recall "the thing I'm debugging"   # cited recall from your own history
 ```
 
 One-shot trial without installing: `uvx alluvia init`.
@@ -84,6 +85,30 @@ $ alluvia propose           # C — new next-steps, grounded in YOUR notes
     ...cites: note:104966a3, note:93de85cc
 $ alluvia rate prop:50bda956 --keep
 ```
+
+### Recall — the front door
+
+```bash
+$ alluvia recall "refresh token storage in the browser" --handoff
+```
+
+`recall` fuses your themes, bridges, and unfinished threads into a few
+cited hits — retrieval only, **zero LLM spend** — and `--handoff` prints a
+paste-ready block for whatever assistant you're in right now:
+
+```
+Relevant prior context from alluvia (query: "refresh token storage…"):
+
+1. Auth token lifecycle [open] — refresh races and rotation.
+   why: 2 of your prior notes match; thread status: open
+   sources: claude-code · 2025-04-18; chatgpt-export · 2025-11-02
+
+Treat this as prior context, not ground truth — verify against the current code.
+```
+
+Inside your assistant, the MCP tool **`recall_now`** does the same thing
+mid-conversation. And bare `alluvia` prints a now-view — open loops, fresh
+bridges, whether a refresh is due.
 
 Plus a **weekly digest** (`alluvia digest run --if-due`) that brings ≤5
 interrupt-worthy items to you — and stays silent when nothing clears the bar.
@@ -180,6 +205,19 @@ where the cross-tool bridges come from.
   feasibility-labeled) but they're LLM output — you rate, alluvia learns.
 - All accepted trade-offs live in [docs/DEBT.md](docs/DEBT.md), each with the
   condition that triggers fixing it.
+
+### Any source, one contract
+
+Beyond the built-in adapters, anything that writes a simple
+[normalized-session JSONL](docs/SOURCES.md) is a source:
+
+```bash
+alluvia ingest --source jsonl --path ./exports/
+```
+
+That's how **multi-machine** setups work with no cloud (aggregate your
+hosts' histories into one directory), and how tools we don't ship a parser
+for arrive already normalized. Community feeders welcome.
 
 MIT · built local-first on purpose: the research this project started from
 found that for developers, trust in this category is *owned data or nothing*.

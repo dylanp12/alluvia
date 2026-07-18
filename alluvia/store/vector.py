@@ -99,8 +99,9 @@ class SqliteVecIndex:
             "SELECT note_id, distance FROM note_vec "
             "WHERE user_id = ? AND embedding MATCH ? AND k = ? ORDER BY distance",
             (user_id, q.tobytes(), k)).fetchall()
-        # vec0 returns L2 distance; convert to a similarity-like score (higher=closer)
-        return [(r[0], float(-r[1])) for r in rows]
+        # vec0 returns L2 distance; our embeddings are normalized, so
+        # cos = 1 - d^2/2 — both backends speak cosine (higher = closer)
+        return [(r[0], float(1.0 - (r[1] * r[1]) / 2.0)) for r in rows]
 
 
 def make_index(conn: sqlite3.Connection, dim: int) -> VectorIndex:
