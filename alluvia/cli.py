@@ -755,6 +755,7 @@ def demo(clean: bool = typer.Option(False, "--clean",
     typer.echo(f"dashboard:  ALLUVIA_DB={demo_db} alluvia serve --open")
     typer.echo("your turn:  alluvia init   (your real history, on your machine)")
     typer.echo("remove:     alluvia demo --clean")
+    conn.close()   # Windows won't let `demo --clean` delete an open file
 
 
 @app.command()
