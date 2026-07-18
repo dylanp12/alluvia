@@ -10,7 +10,8 @@ runner = CliRunner()
 
 
 def _clean_env(tmp_path, monkeypatch):
-    monkeypatch.setenv("HOME", str(tmp_path))            # demo db under fake home
+    monkeypatch.setenv("HOME", str(tmp_path))            # POSIX ~ 
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))     # Windows ~
     monkeypatch.delenv("ALLUVIA_DB", raising=False)
     for k in ("GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(k, raising=False)

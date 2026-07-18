@@ -1,6 +1,8 @@
 """`alluvia doctor`: diagnoses the whole installation and REPAIRS what is
 safe to repair (zero-data-loss, idempotent). Raw data and judgments are
 never touched by auto-repair."""
+import pytest
+import sys
 import os
 import sqlite3
 
@@ -89,6 +91,8 @@ def test_wal_enabled_on_legacy_store(tmp_path):
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="POSIX file permissions")
 def test_config_perms_tightened(repo, tmp_path, monkeypatch):
     cfg = tmp_path / "config.toml"
     cfg.write_text('[llm]\nprovider = "groq"\n')

@@ -1,6 +1,11 @@
 """Single-writer lock, released by the OS on ANY process death — stale locks
 are structurally impossible (which is why this is an OS lock, not a pidfile).
-The pid inside the file is advisory, for friendly messages only."""
+
+The holder's pid is written to an unlocked sidecar (`<path>.pid`), not into
+the locked file itself: on Windows the lock is a byte-range lock that would
+block a reader trying to see the pid. The sidecar is advisory, for friendly
+"already running (pid N)" messages only, and is only ever consulted right
+after an acquire fails — i.e. while a live holder exists."""
 from __future__ import annotations
 
 import os
@@ -14,6 +19,10 @@ class Lock:
     def release(self) -> None:
         try:
             os.close(self._fd)            # closing the fd drops the OS lock
+        except OSError:
+            pass
+        try:
+            os.remove(self.path + ".pid")
         except OSError:
             pass
 
@@ -33,15 +42,17 @@ def acquire(path: str) -> Lock | None:
     except OSError:
         os.close(fd)
         return None
-    os.ftruncate(fd, 0)
-    os.write(fd, str(os.getpid()).encode())
-    os.fsync(fd)
+    try:
+        with open(path + ".pid", "w") as pf:      # unlocked, readable by anyone
+            pf.write(str(os.getpid()))
+    except OSError:
+        pass
     return Lock(fd, path)
 
 
 def holder_pid(path: str) -> int | None:
     try:
-        with open(path) as f:
+        with open(path + ".pid") as f:
             return int(f.read().strip() or 0) or None
     except (OSError, ValueError):
         return None

@@ -60,3 +60,17 @@ def test_refresh_exits_zero_when_lock_held(tmp_path, monkeypatch):
     assert r.exit_code == 0
     assert "already running" in r.output and str(os.getpid()) in r.output
     held.release()
+
+
+def test_holder_pid_readable_while_lock_held(tmp_path):
+    """Regression: the pid must be readable by a separate reader even while
+    the lock is held — on Windows the lock byte-range would block reading it
+    out of the locked file, so the pid lives in an unlocked sidecar."""
+    from alluvia.lockfile import acquire, holder_pid
+    p = str(tmp_path / "r.lock")
+    h = acquire(p)
+    try:
+        assert holder_pid(p) == os.getpid()      # readable concurrently with the lock
+    finally:
+        h.release()
+    assert holder_pid(p) is None                 # sidecar cleaned on release

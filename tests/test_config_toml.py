@@ -1,3 +1,5 @@
+import sys
+import pytest
 import os
 import stat
 from alluvia import config
@@ -71,6 +73,8 @@ def test_missing_file_means_defaults(tmp_path, monkeypatch):
     assert config.digest_days() == 7
 
 
+@pytest.mark.skipif(sys.platform == "win32",
+                    reason="POSIX file permissions")
 def test_write_config_0600_and_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("ALLUVIA_CONFIG", str(tmp_path / "c.toml"))
     config.reset_toml_cache()
