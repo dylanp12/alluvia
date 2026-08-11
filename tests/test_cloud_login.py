@@ -59,6 +59,24 @@ def test_loopback_login_returns_tokens(broker, monkeypatch):
     assert access == "ACCESS" and refresh == "REFRESH"
 
 
-def test_refresh_session_exchanges(broker):
-    tok, ref = refresh_session(broker, "old-refresh")
+def test_refresh_session_exchanges(monkeypatch):
+    # mock the HTTP layer (no real socket -> no CI flakiness); assert request shape too.
+    from alluvia import cloudclient
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"token": "NEWACCESS", "refresh": "NEWREFRESH"}).encode()
+
+    captured = {}
+
+    def fake_urlopen(req, timeout=0):
+        captured["url"] = req.full_url
+        captured["body"] = json.loads(req.data.decode())
+        return FakeResp()
+
+    monkeypatch.setattr(cloudclient.urllib.request, "urlopen", fake_urlopen)
+    tok, ref = refresh_session("http://server.example", "old-refresh")
     assert tok == "NEWACCESS" and ref == "NEWREFRESH"
+    assert captured["url"].endswith("/cli/refresh")
+    assert captured["body"]["refresh_token"] == "old-refresh"
