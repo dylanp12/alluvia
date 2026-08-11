@@ -1,6 +1,7 @@
 """Client: session storage + request shape (HTTP mocked)."""
 import json
 import os
+import sys
 
 
 def test_session_roundtrip_is_0600(tmp_path, monkeypatch):
@@ -9,7 +10,8 @@ def test_session_roundtrip_is_0600(tmp_path, monkeypatch):
     save_session("https://api.example.com/", "tok123")
     s = load_session()
     assert s == {"url": "https://api.example.com", "token": "tok123"}
-    assert oct(os.stat(tmp_path / "s.json").st_mode & 0o777) == "0o600"
+    if sys.platform != "win32":       # POSIX mode; Windows uses ACLs, chmod is a no-op
+        assert oct(os.stat(tmp_path / "s.json").st_mode & 0o777) == "0o600"
     clear_session()
     assert load_session() is None
 
