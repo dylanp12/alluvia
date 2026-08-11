@@ -45,6 +45,8 @@ class Note:
     text: str
     created_at: datetime | None
     canonical_id: str | None = None
+    run_id: str | None = None            # extraction run that produced this note
+    pipeline_version: int | None = None  # populated on read; write uses the global
 
 
 @dataclass
@@ -112,3 +114,17 @@ class Proposal:
     rated_at: str | None = None
     rating_note: str | None = None
     rated_via: str | None = None      # cli | mcp (audit: who relayed the judgment)
+
+
+@dataclass
+class ExtractionRun:
+    """One pipeline extraction pass over one session — which stage, which
+    resolved model, which prompt. Notes point back via run_id."""
+    id: str
+    user_id: str
+    session_id: str
+    stage: str                 # distill (more stages in later milestones)
+    model: str | None          # resolved model, None when the LLM can't say
+    pipeline_version: int
+    prompt_hash: str | None
+    created_at: str

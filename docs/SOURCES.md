@@ -41,6 +41,29 @@ Fields:
 - `title` (optional) — defaults to the first message's opening words.
 - `started_at` / `ended_at` (optional) — ISO-8601.
 
+There is no `project`/workspace field: attribution is per `source`. If cross-project vs
+within-project bridges ever matter, an optional field can be added compatibly.
+
+## What to send
+
+`messages[].text` must be **conversation authored by the user or the model** — not
+harness-injected scaffolding. Real transcripts stuff the user role with runtime content
+shaped like a user turn that nobody wrote: system reminders, slash-command echoes,
+environment/context blocks, background task notifications, tool output. Only the source
+knows its own injection patterns, so **strip them before emitting** — otherwise that noise
+is attributed to the human and pollutes themes and bridges. (alluvia filters the common
+harness patterns as a backstop, but the sender owns fidelity.)
+
+**Exclude subagent / child sessions.** If a tool runs sub-sessions (a parent spawning
+helpers), don't emit them as top-level sessions — they're mostly duplicated parent context
+with little unique signal, and they'd pollute themes and bridges the way they'd pollute a
+search index.
+
+**Emit settled sessions, not live ones.** Re-emitting a session with the same
+`source:native_id` replaces it and **re-distills** it (an LLM call). A scheduled exporter
+over a growing archive should emit a session only once it's settled — e.g. no new messages
+for a few minutes — so a live session isn't re-distilled on every sync.
+
 ## Semantics
 
 - **Idempotent**: re-ingesting is safe — sessions dedupe on content; a

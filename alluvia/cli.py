@@ -109,32 +109,19 @@ def build_engine(repo: Repo, reporter=None):
 @app.command()
 def ingest(
     source: str = typer.Option("claude-code", "--source",
-                               help="claude-code | cursor | windsurf | antigravity | chatgpt-export | jsonl (docs/SOURCES.md)"),
+                               help="claude-code | cursor | windsurf | antigravity | cline | kilo-code | roo-code | chatgpt-export | jsonl (docs/SOURCES.md)"),
     path: str = typer.Option(None, "--path",
                              help="Root/logs dir (claude-code), fork root override, "
                                   "or export ZIP/dir (chatgpt-export)"),
 ):
+    from alluvia.ingest import SOURCES
     repo = _repo()
-    if source == "claude-code":
-        if not path:
-            from alluvia.platform import claude_code_root
-            path = config.source_root("claude-code") or claude_code_root()
-        adapter = ClaudeCodeAdapter(path, user_id=config.DEFAULT_USER)
-    elif source in ("cursor", "windsurf", "antigravity"):
-        from alluvia.ingest.vscode_fork import VSCodeForkAdapter
-        adapter = VSCodeForkAdapter(source, root=path, user_id=config.DEFAULT_USER)
-    elif source == "jsonl":
-        if not path:
-            raise typer.BadParameter("--path to a .jsonl file or directory is required")
-        from alluvia.ingest.jsonl_source import JsonlSourceAdapter
-        adapter = JsonlSourceAdapter(path, user_id=config.DEFAULT_USER)
-    elif source == "chatgpt-export":
-        if not path:
-            raise typer.BadParameter("--path to the export ZIP/dir is required")
-        from alluvia.ingest.chatgpt_export import ChatGPTExportAdapter
-        adapter = ChatGPTExportAdapter(path, user_id=config.DEFAULT_USER)
-    else:
-        raise typer.BadParameter(f"unknown source: {source}")
+    if source not in SOURCES:
+        raise typer.BadParameter(f"unknown source: {source}. known: {', '.join(SOURCES)}")
+    try:
+        adapter = SOURCES[source](path)
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
     from alluvia.progress import make_reporter
     rep = make_reporter()
     n_new = 0
@@ -160,6 +147,139 @@ def show(session_id: str):
     typer.echo(f"# {s.title}  [{s.source}:{s.native_id}]")
     for m in s.messages:
         typer.echo(f"\n[{m.role}] {m.text}")
+
+
+@app.command()
+def tensions(
+    scan: int = typer.Option(0, "--scan",
+                              help="First classify the top N connections into "
+                                   "typed relations (uses your LLM)"),
+    keep: str = typer.Option(None, "--keep",
+                              help="Confirm a finding by id — promotes it to "
+                                   "a confirmed relation in your map"),
+    dismiss: str = typer.Option(None, "--dismiss",
+                                 help="Dismiss a finding by id"),
+):
+    """Contradictions, superseded decisions, and recurring problems — typed
+    findings with confidence, rationale, and source evidence. Predictions,
+    not facts: confirm with --keep to promote one into your map."""
+    from datetime import datetime, timezone
+    repo = _repo()
+    if keep or dismiss:
+        from alluvia.engine.relate import judge_candidate
+        out = judge_candidate(repo, config.DEFAULT_USER, keep or dismiss,
+                              "keep" if keep else "dismiss",
+                              now=datetime.now(timezone.utc))
+        if "error" in out:
+            typer.echo(out["error"])
+            raise typer.Exit(1)
+        verb = "confirmed → added to your map" if out["promoted"] \
+            else "dismissed"
+        typer.echo(f"{out['id']}: {verb}")
+        return
+    if scan:
+        from alluvia.progress import make_reporter
+        rep = make_reporter()
+        try:
+            rep.start("classifying connections")
+            stats = build_engine(repo, reporter=rep).type_top_links(
+                config.DEFAULT_USER, limit=scan)
+        finally:
+            rep.close()
+        typer.echo(f"scanned {stats['examined']} connection(s): "
+                   f"{stats['typed']} typed, {stats['skipped']} unrelated, "
+                   f"{stats['errors']} errors")
+    cands = [c for c in repo.list_candidates(config.DEFAULT_USER)
+             if c["status"] in ("pending", "confirmed")]
+    if not cands:
+        typer.echo("no typed findings yet — run `alluvia tensions --scan 20` "
+                   "to classify your top connections")
+        return
+    notes = {n.id: n for n in repo.get_notes(config.DEFAULT_USER)}
+    order = {"CONTRADICTS": 0, "SUPERSEDES": 1, "RECURS_AS": 2,
+             "ADDRESSES": 3, "TRANSFERS_TO": 4}
+    cands.sort(key=lambda c: (order.get(c["relation"], 9), -(c["score"] or 0)))
+    current = None
+    for c in cands:
+        if c["relation"] != current:
+            current = c["relation"]
+            typer.echo(f"\n== {current} ==")
+        a, b = notes.get(c["subject_id"]), notes.get(c["object_id"])
+        if not a or not b:
+            continue
+        mark = "✓ " if c["status"] == "confirmed" else ""
+        typer.echo(f"{mark}[{c['score']:.2g}] \"{a.text[:100]}\"  ({c['id']})")
+        typer.echo(f"      → \"{b.text[:100]}\"")
+        if c["why"]:
+            typer.echo(f"      why: {c['why']}")
+        for ev in c["evidence"]:
+            typer.echo(f"      evidence: {ev}")
+
+
+@app.command()
+def loops(limit: int = typer.Option(15, "--limit")):
+    """Problems you recorded and never resolved: no fix decision points at
+    them — not in your notes, not in your confirmed findings. Pure lookup;
+    spends nothing."""
+    from alluvia.models import to_utc
+    from datetime import datetime, timezone
+    repo = _repo()
+    user = config.DEFAULT_USER
+    notes = {n.id: n for n in repo.get_notes(user)}
+    addressed = {e["object_id"] for e in repo.list_edges(user)
+                 if e["relation"] in ("ADDRESSES", "RESOLVED_BY")}
+    addressed |= {c["object_id"] for c in repo.list_candidates(user)
+                  if c["relation"] in ("ADDRESSES", "RESOLVED_BY")
+                  and c["status"] != "dismissed"}
+    muted = repo.muted_labels(user)
+
+    def span_days(t):
+        if t.first_seen and t.last_seen:
+            return (to_utc(t.last_seen) - to_utc(t.first_seen)).days
+        return 0
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for t in repo.list_themes(user):
+        if t.status != "open" or t.label.lower() in muted:
+            continue
+        for nid in t.note_ids:
+            n = notes.get(nid)
+            if not n or n.kind != "problem" or n.id in addressed:
+                continue
+            age = (now - to_utc(n.created_at)).days if n.created_at else 0
+            rows.append((t.session_count * (span_days(t) + 1), age, n, t))
+    if not rows:
+        typer.echo("no open loops — every recorded problem has an "
+                   "addressing signal")
+        return
+    rows.sort(key=lambda r: (-r[0], -r[1]))
+    for _, age, n, t in rows[:limit]:
+        typer.echo(f"[{age}d] \"{n.text[:110]}\"")
+        typer.echo(f"      theme: {t.label} · source: "
+                   f"{n.session_id.split(':', 1)[0]} · {n.id}")
+
+
+@app.command("export-graph")
+def export_graph(
+    out: str = typer.Option("alluvia-graph", "--out",
+                             help="Destination directory for the bundle"),
+    no_judgments: bool = typer.Option(False, "--no-judgments",
+                                       help="Leave proposals/ratings out of "
+                                            "the export"),
+):
+    """Export your knowledge map as a portable graph bundle (open format:
+    contract.json + gzipped JSONL of nodes and events, with provenance)."""
+    from datetime import datetime, timezone
+    from alluvia import graph_export
+    repo = _repo()
+    manifest, nodes, events, judgments = graph_export.build_bundle(
+        repo, config.DEFAULT_USER,
+        now_iso=datetime.now(timezone.utc).isoformat(),
+        include_judgments=not no_judgments)
+    graph_export.write_bundle(out, manifest, nodes, events, judgments)
+    typer.echo(f"wrote graph bundle: {out} "
+               f"({len(nodes)} nodes, {len(events)} events)")
 
 
 def _refresh_plan(repo) -> None:
@@ -364,7 +484,8 @@ def propose(
             raise typer.Exit(1)
         cands = [Candidate(kind="theme", source_ref=t.id, note_ids=tuple(t.note_ids))]
     else:
-        cands = candidates(repo, config.DEFAULT_USER, limit=limit)
+        cands = candidates(repo, config.DEFAULT_USER, limit=limit,
+                           surface="propose")
     if not cands:
         typer.echo("no fresh material to propose from — run `alluvia refresh`?")
         return
@@ -570,6 +691,92 @@ def _do_ingest(source: str, path: str) -> None:
 
 digest_app = typer.Typer(help="Proactive digest: run/show/dismiss/keep")
 app.add_typer(digest_app, name="digest")
+
+cloud_app = typer.Typer(help="Sync your derived memory to Alluvia Cloud (opt-in).")
+app.add_typer(cloud_app, name="cloud")
+
+
+@cloud_app.command("sync")
+def cloud_sync(yes: bool = typer.Option(False, "--yes", "-y",
+                                        help="Skip the confirm prompt.")):
+    """Upload your derived memory to your Alluvia Cloud org. Shows exactly what
+    will leave the machine first; texts are secret-scrubbed, raw transcripts
+    stay local unless a source is set to 'raw'."""
+    from alluvia.cloudclient import load_session, push_bundle, SyncError
+    from alluvia.cloudsync.bundle import build_bundle, preview
+    from alluvia.cloudsync.policy import load_policy
+    sess = load_session()
+    if not sess:
+        typer.echo("not signed in — run `alluvia cloud login` first")
+        raise typer.Exit(1)
+    bundle = build_bundle(_repo(), config.DEFAULT_USER, load_policy())
+    typer.echo(preview(bundle))
+    typer.echo(f"\ndestination: {sess['url']}")
+    if not yes and not typer.confirm("upload this?", default=False):
+        typer.echo("cancelled — nothing left the machine")
+        raise typer.Exit(0)
+    from alluvia.cloudclient import refresh_session, save_session
+    try:
+        result = push_bundle(sess["url"], sess["token"], bundle)
+    except SyncError as e:
+        if sess.get("refresh"):                 # token likely expired — refresh once
+            try:
+                tok, ref = refresh_session(sess["url"], sess["refresh"])
+                save_session(sess["url"], tok, ref)
+                result = push_bundle(sess["url"], tok, bundle)
+            except SyncError as e2:
+                typer.echo(f"sync failed: {e2}")
+                raise typer.Exit(1)
+        else:
+            typer.echo(f"sync failed: {e}")
+            raise typer.Exit(1)
+    typer.echo(f"synced: {result}")
+
+
+@cloud_app.command("login")
+def cloud_login(
+    url: str = typer.Option(None, "--url", help="Alluvia Cloud API URL."),
+    token: str = typer.Option(None, "--token",
+                              help="Set a token directly (CI/self-hosted); skips the browser."),
+    no_browser: bool = typer.Option(False, "--no-browser",
+                                    help="Print the sign-in URL instead of opening a browser."),
+):
+    """Sign in to Alluvia Cloud. Opens your browser to authenticate; the token
+    is returned to a one-shot local listener. --token sets one directly."""
+    from alluvia.cloudclient import loopback_login, save_session, SyncError
+    url = url or os.environ.get("ALLUVIA_CLOUD_URL")
+    if not url:
+        typer.echo("need --url (or set ALLUVIA_CLOUD_URL)")
+        raise typer.Exit(1)
+    if token:
+        save_session(url, token)
+        typer.echo(f"signed in · {url.rstrip('/')}")
+        return
+    typer.echo("opening your browser to sign in…")
+    try:
+        access, refresh = loopback_login(url, open_browser=not no_browser)
+    except SyncError as e:
+        typer.echo(f"login failed: {e}")
+        raise typer.Exit(1)
+    save_session(url, access, refresh)
+    typer.echo(f"signed in · {url.rstrip('/')}")
+
+
+@cloud_app.command("status")
+def cloud_status():
+    from alluvia.cloudclient import load_session
+    sess = load_session()
+    if not sess:
+        typer.echo("not signed in to Alluvia Cloud")
+        return
+    typer.echo(f"signed in · {sess['url']}")
+
+
+@cloud_app.command("logout")
+def cloud_logout():
+    from alluvia.cloudclient import clear_session
+    clear_session()
+    typer.echo("signed out")
 
 
 def _pending_flag() -> str:

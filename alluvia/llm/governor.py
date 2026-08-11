@@ -135,6 +135,7 @@ class Governor:
         self.rungs = tuple(rungs)
         self.on_wait = on_wait       # callable(model, seconds): a deliberate
         #                              wait must never look like a hang
+        self.last_model: str | None = None   # resolved model of the last success
 
     _NOTIFY_WAIT = 2.0               # don't narrate sub-2s sleeps
 
@@ -224,6 +225,7 @@ class Governor:
                 else:
                     st.update(rung=0, consecutive=0, cooldown_until=0.0,
                               last_success=self.clock())
+                    self.last_model = model
                     # network accounting: LLM calls are alluvia's only
                     # traffic, so counting here covers all of it
                     import json as _json

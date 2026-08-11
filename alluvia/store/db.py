@@ -144,6 +144,66 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             pipeline_version INTEGER NOT NULL,
             PRIMARY KEY (user_id, session_id)
         );
+        CREATE TABLE IF NOT EXISTS extraction_runs (
+            id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            stage TEXT NOT NULL,
+            model TEXT,
+            pipeline_version INTEGER NOT NULL,
+            prompt_hash TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS events (
+            id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            relation TEXT,
+            participants_json TEXT NOT NULL,
+            event_time_start TEXT,
+            event_time_end TEXT,
+            derived_at TEXT,
+            run_id TEXT,
+            confidence REAL,
+            human_confirmed INTEGER NOT NULL DEFAULT 0,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            derivation_json TEXT NOT NULL DEFAULT '[]',
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS edges (
+            id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            event_id TEXT,
+            weight REAL,
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS candidates (
+            id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            relation TEXT NOT NULL,
+            subject_id TEXT NOT NULL,
+            object_id TEXT NOT NULL,
+            score REAL,
+            uncertainty_json TEXT,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            policy_version TEXT,
+            why TEXT,
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS slates (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            surface TEXT NOT NULL,
+            policy_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            items_json TEXT NOT NULL
+        );
         CREATE TABLE IF NOT EXISTS llm_health (
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -170,6 +230,12 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
     pcols = {r[1] for r in conn.execute("PRAGMA table_info(proposals)")}
     if "rated_via" not in pcols:
         conn.execute("ALTER TABLE proposals ADD COLUMN rated_via TEXT")
+    ncols = {r[1] for r in conn.execute("PRAGMA table_info(notes)")}
+    if "run_id" not in ncols:
+        conn.execute("ALTER TABLE notes ADD COLUMN run_id TEXT")
+    ccols = {r[1] for r in conn.execute("PRAGMA table_info(candidates)")}
+    if "why" not in ccols:
+        conn.execute("ALTER TABLE candidates ADD COLUMN why TEXT")
     hcols = {r[1] for r in conn.execute("PRAGMA table_info(llm_health)")}
     for col in ("calls", "sent_bytes", "recv_bytes"):
         if col not in hcols:

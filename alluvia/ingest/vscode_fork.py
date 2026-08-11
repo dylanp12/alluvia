@@ -31,10 +31,12 @@ import sqlite3
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Iterator
 
-from alluvia.models import Message, RawSession, content_hash, session_id
+from alluvia.ingest.common import (build_session, message_from_dict as _msg_from_dict,
+                                   messages_from_dicts as _messages_from_list, parse_ts as _ts)
+from alluvia.models import Message, RawSession
 
 log = logging.getLogger(__name__)
 
@@ -66,54 +68,6 @@ FLAVORS: dict[str, FlavorSpec] = {
         key_patterns=(r"agent.*(session|conversation)", r"chat\.ChatSessionStore"),
     ),
 }
-
-_USER_ROLES = {"user", "human", "1", 1}
-_ASSISTANT_ROLES = {"ai", "assistant", "bot", "2", 2}
-
-
-def _ts(v) -> datetime | None:
-    """Parse epoch ms / epoch s / ISO strings; None on anything else."""
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        if v > 1e12:                     # ms epoch
-            v = v / 1000.0
-        try:
-            return datetime.fromtimestamp(float(v), tz=timezone.utc)
-        except (OverflowError, OSError, ValueError):
-            return None
-    if isinstance(v, str):
-        try:
-            return datetime.fromisoformat(v.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    return None
-
-
-def _msg_from_dict(d: dict) -> Message | None:
-    role_raw = d.get("role", d.get("type", d.get("author")))
-    if role_raw in _USER_ROLES:
-        role = "user"
-    elif role_raw in _ASSISTANT_ROLES:
-        role = "assistant"
-    else:
-        return None
-    text = d.get("text") or d.get("content") or d.get("message") or ""
-    if not isinstance(text, str) or not text.strip():
-        return None
-    ts = _ts(d.get("timestamp", d.get("createdAt", d.get("created_at"))))
-    return Message(role=role, text=text.strip(), ts=ts)
-
-
-def _messages_from_list(items) -> list[Message]:
-    out = []
-    for it in items:
-        if isinstance(it, dict):
-            m = _msg_from_dict(it)
-            if m:
-                out.append(m)
-    return out
-
 
 def _sessions_from_payload(payload, fallback_id: str) -> list[tuple[str, str | None, list[Message]]]:
     """Try known payload shapes -> [(native_id, title, messages)]."""
@@ -285,12 +239,5 @@ class VSCodeForkAdapter:
     def _session(self, native_id: str, title: str | None, msgs: list[Message],
                  started: datetime | None = None,
                  ended: datetime | None = None) -> RawSession:
-        times = [m.ts for m in msgs if m.ts]
-        return RawSession(
-            id=session_id(self.spec.name, native_id), user_id=self.user_id,
-            source=self.spec.name, native_id=native_id,
-            title=(title or msgs[0].text)[:60],
-            started_at=started or (min(times) if times else None),
-            ended_at=ended or (max(times) if times else None),
-            messages=msgs, content_hash=content_hash(msgs),
-        )
+        return build_session(self.spec.name, native_id, title, msgs, self.user_id,
+                             started=started, ended=ended)

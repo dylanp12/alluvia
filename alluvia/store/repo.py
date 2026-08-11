@@ -6,7 +6,7 @@ from datetime import datetime
 import numpy as np
 
 from alluvia.config import PIPELINE_VERSION
-from alluvia.models import Link, Message, Note, Proposal, RawSession, Theme
+from alluvia.models import ExtractionRun, Link, Message, Note, Proposal, RawSession, Theme
 from alluvia.store.vector import make_index
 
 
@@ -79,24 +79,29 @@ class Repo:
         for n in notes:
             self.conn.execute(
                 """INSERT INTO notes
-                   (id,user_id,session_id,span_ref,kind,text,created_at,canonical_id,pipeline_version)
-                   VALUES (?,?,?,?,?,?,?,?,?)
+                   (id,user_id,session_id,span_ref,kind,text,created_at,canonical_id,
+                    pipeline_version,run_id)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(user_id,id) DO UPDATE SET
                      session_id=excluded.session_id, span_ref=excluded.span_ref,
                      kind=excluded.kind, text=excluded.text, created_at=excluded.created_at,
-                     canonical_id=excluded.canonical_id, pipeline_version=excluded.pipeline_version""",
+                     canonical_id=excluded.canonical_id,
+                     pipeline_version=excluded.pipeline_version,
+                     run_id=excluded.run_id""",
                 (n.id, n.user_id, n.session_id, n.span_ref, n.kind, n.text,
-                 _dts(n.created_at), n.canonical_id, PIPELINE_VERSION),
+                 _dts(n.created_at), n.canonical_id, PIPELINE_VERSION, n.run_id),
             )
         self.conn.commit()
 
     def get_notes(self, user_id: str) -> list[Note]:
         rows = self.conn.execute(
-            "SELECT id,user_id,session_id,span_ref,kind,text,created_at,canonical_id "
-            "FROM notes WHERE user_id=? ORDER BY id", (user_id,)
+            "SELECT id,user_id,session_id,span_ref,kind,text,created_at,canonical_id,"
+            "run_id,pipeline_version FROM notes WHERE user_id=? ORDER BY id",
+            (user_id,)
         ).fetchall()
         return [Note(id=r[0], user_id=r[1], session_id=r[2], span_ref=r[3], kind=r[4],
-                     text=r[5], created_at=_dt(r[6]), canonical_id=r[7]) for r in rows]
+                     text=r[5], created_at=_dt(r[6]), canonical_id=r[7],
+                     run_id=r[8], pipeline_version=r[9]) for r in rows]
 
     def session_ids_with_notes(self, user_id: str,
                                version: int | None = None) -> set[str]:
@@ -121,6 +126,139 @@ class Repo:
         return {r[0] for r in self.conn.execute(
             "SELECT session_id FROM distilled_sessions "
             "WHERE user_id=? AND pipeline_version >= ?", (user_id, version))}
+
+    # ---- extraction runs (provenance: which model/prompt produced what) ----
+    def record_extraction_run(self, run: ExtractionRun) -> None:
+        self.conn.execute(
+            """INSERT INTO extraction_runs
+               (id,user_id,session_id,stage,model,pipeline_version,prompt_hash,created_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(user_id,id) DO NOTHING""",
+            (run.id, run.user_id, run.session_id, run.stage, run.model,
+             run.pipeline_version, run.prompt_hash, run.created_at))
+        self.conn.commit()
+
+    def list_extraction_runs(self, user_id: str) -> list[ExtractionRun]:
+        rows = self.conn.execute(
+            "SELECT id,user_id,session_id,stage,model,pipeline_version,prompt_hash,"
+            "created_at FROM extraction_runs WHERE user_id=? ORDER BY created_at, id",
+            (user_id,)).fetchall()
+        return [ExtractionRun(id=r[0], user_id=r[1], session_id=r[2], stage=r[3],
+                              model=r[4], pipeline_version=r[5], prompt_hash=r[6],
+                              created_at=r[7]) for r in rows]
+
+    # ---- graph rows (events/edges/candidates/slates): dict-shaped, thin.
+    # Producers arrive with extraction v2 and the lens/flywheel milestones. ----
+    def insert_events(self, user_id: str, rows: list[dict]) -> None:
+        for e in rows:
+            self.conn.execute(
+                """INSERT INTO events
+                   (id,user_id,event_type,relation,participants_json,
+                    event_time_start,event_time_end,derived_at,run_id,confidence,
+                    human_confirmed,evidence_json,derivation_json)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id,id) DO NOTHING""",
+                (e["id"], user_id, e["event_type"], e.get("relation"),
+                 json.dumps(e.get("participants", [])),
+                 e.get("event_time_start"), e.get("event_time_end"),
+                 e.get("derived_at"), e.get("run_id"), e.get("confidence"),
+                 1 if e.get("human_confirmed") else 0,
+                 json.dumps(e.get("evidence", [])),
+                 json.dumps(e.get("derivation", []))))
+        self.conn.commit()
+
+    def list_events(self, user_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id,event_type,relation,participants_json,event_time_start,"
+            "event_time_end,derived_at,run_id,confidence,human_confirmed,"
+            "evidence_json,derivation_json FROM events WHERE user_id=? ORDER BY id",
+            (user_id,)).fetchall()
+        return [{"id": r[0], "event_type": r[1], "relation": r[2],
+                 "participants": json.loads(r[3]), "event_time_start": r[4],
+                 "event_time_end": r[5], "derived_at": r[6], "run_id": r[7],
+                 "confidence": r[8], "human_confirmed": bool(r[9]),
+                 "evidence": json.loads(r[10]), "derivation": json.loads(r[11])}
+                for r in rows]
+
+    def upsert_edges(self, user_id: str, rows: list[dict]) -> None:
+        for e in rows:
+            self.conn.execute(
+                """INSERT INTO edges (id,user_id,subject_id,relation,object_id,
+                                       event_id,weight)
+                   VALUES (?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id,id) DO UPDATE SET
+                     subject_id=excluded.subject_id, relation=excluded.relation,
+                     object_id=excluded.object_id, event_id=excluded.event_id,
+                     weight=excluded.weight""",
+                (e["id"], user_id, e["subject_id"], e["relation"], e["object_id"],
+                 e.get("event_id"), e.get("weight")))
+        self.conn.commit()
+
+    def list_edges(self, user_id: str) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT id,subject_id,relation,object_id,event_id,weight "
+            "FROM edges WHERE user_id=? ORDER BY id", (user_id,)).fetchall()
+        return [{"id": r[0], "subject_id": r[1], "relation": r[2],
+                 "object_id": r[3], "event_id": r[4], "weight": r[5]} for r in rows]
+
+    def insert_candidates(self, user_id: str, rows: list[dict]) -> None:
+        for c in rows:
+            self.conn.execute(
+                """INSERT INTO candidates
+                   (id,user_id,relation,subject_id,object_id,score,
+                    uncertainty_json,evidence_json,status,created_at,
+                    policy_version,why)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(user_id,id) DO NOTHING""",
+                (c["id"], user_id, c["relation"], c["subject_id"], c["object_id"],
+                 c.get("score"),
+                 json.dumps(c["uncertainty"]) if c.get("uncertainty") is not None
+                 else None,
+                 json.dumps(c.get("evidence", [])),
+                 c.get("status", "pending"), c["created_at"],
+                 c.get("policy_version"), c.get("why")))
+        self.conn.commit()
+
+    def list_candidates(self, user_id: str, status: str | None = None) -> list[dict]:
+        sql = ("SELECT id,relation,subject_id,object_id,score,uncertainty_json,"
+               "evidence_json,status,created_at,policy_version,why "
+               "FROM candidates WHERE user_id=?")
+        params: tuple = (user_id,)
+        if status is not None:
+            sql += " AND status=?"
+            params = (user_id, status)
+        rows = self.conn.execute(sql + " ORDER BY id", params).fetchall()
+        return [{"id": r[0], "relation": r[1], "subject_id": r[2], "object_id": r[3],
+                 "score": r[4],
+                 "uncertainty": json.loads(r[5]) if r[5] else None,
+                 "evidence": json.loads(r[6]), "status": r[7], "created_at": r[8],
+                 "policy_version": r[9], "why": r[10]} for r in rows]
+
+    def set_candidate_status(self, user_id: str, cid: str, status: str) -> None:
+        self.conn.execute(
+            "UPDATE candidates SET status=? WHERE user_id=? AND id=?",
+            (status, user_id, cid))
+        self.conn.commit()
+
+    def insert_slate(self, user_id: str, surface: str, policy_version: str,
+                     created_at: str, items: list[dict]) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO slates(user_id,surface,policy_version,created_at,items_json)"
+            " VALUES (?,?,?,?,?)",
+            (user_id, surface, policy_version, created_at, json.dumps(items)))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def list_slates(self, user_id: str, surface: str | None = None) -> list[dict]:
+        sql = ("SELECT id,surface,policy_version,created_at,items_json FROM slates "
+               "WHERE user_id=?")
+        params: tuple = (user_id,)
+        if surface is not None:
+            sql += " AND surface=?"
+            params = (user_id, surface)
+        rows = self.conn.execute(sql + " ORDER BY id", params).fetchall()
+        return [{"id": r[0], "surface": r[1], "policy_version": r[2],
+                 "created_at": r[3], "items": json.loads(r[4])} for r in rows]
 
     # ---- embeddings (brute-force numpy; sqlite-vec is a later optimization) ----
     def set_embedding(self, user_id: str, note_id: str, vec: list[float]) -> None:
@@ -326,6 +464,11 @@ class Repo:
                  it["snapshot"]))
         self.conn.commit()
         return did
+
+    def digest_count(self, user_id: str) -> int:
+        return self.conn.execute(
+            "SELECT COUNT(*) FROM digests WHERE user_id=?",
+            (user_id,)).fetchone()[0]
 
     def latest_digest(self, user_id: str):
         return self.conn.execute(

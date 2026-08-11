@@ -59,6 +59,16 @@ def db_path() -> str:
                           or os.path.expanduser("~/.alluvia/alluvia.db"))
 
 
+def managed_distillation() -> bool:
+    """Opt-in: route distillation through Alluvia's managed gateway (requires
+    `alluvia cloud login`). OFF by default. When on, scrubbed+PII-redacted transcripts
+    are distilled under the team's budget-capped key instead of a local BYOK key."""
+    env = os.environ.get("ALLUVIA_MANAGED_DISTILL")
+    if env is not None:
+        return env.strip().lower() in ("1", "true", "yes", "on")
+    return bool(_toml().get("cloud", {}).get("managed_distillation"))
+
+
 def llm_provider() -> str:
     return (os.environ.get("ALLUVIA_LLM_PROVIDER")
             or _toml().get("llm", {}).get("provider")

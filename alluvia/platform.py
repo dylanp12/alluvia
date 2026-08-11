@@ -27,3 +27,17 @@ def fork_roots(app: str) -> tuple[str, ...]:
 
 def claude_code_root() -> str:
     return os.path.join(_HOME, ".claude", "projects")
+
+
+_VSCODE_EDITORS = ("Code", "Code - Insiders", "Cursor", "VSCodium", "Windsurf")
+
+
+def vscode_extension_dirs(publisher_ext: str) -> list[str]:
+    """Existing `<editor>/User/globalStorage/<publisher_ext>/` dirs across editors + OSes."""
+    out = []
+    for editor in _VSCODE_EDITORS:
+        for root in _candidates(editor):
+            d = os.path.join(root, "User", "globalStorage", publisher_ext)
+            if os.path.isdir(d):
+                out.append(d)
+    return sorted(set(out))

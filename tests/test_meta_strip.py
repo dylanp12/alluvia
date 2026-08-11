@@ -10,6 +10,14 @@ def test_is_meta_message_matches_markers():
     assert not is_meta_message("design the retry policy for the api")
 
 
+def test_is_meta_message_matches_injected_scaffolding():
+    # runtime-injected content that lands in a user-role slot (issue #15)
+    assert is_meta_message("[SYSTEM NOTIFICATION - NOT USER INPUT]\nbackground task completed")
+    assert is_meta_message("This session is being continued from a previous conversation "
+                           "that ran out of context. The summary below covers ...")
+    assert not is_meta_message("continue the auth refactor we discussed earlier")
+
+
 def test_render_drops_meta_messages_keeps_real_ones():
     msgs = [
         Message(role="user", text="Stop hook feedback:\nClaude evaluator determined X."),

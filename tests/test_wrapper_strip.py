@@ -18,6 +18,14 @@ def test_plain_text_untouched():
     assert strip_wrappers("just a normal thought") == "just a normal thought"
 
 
+def test_strips_task_notification_block():
+    text = ("real design question about retries\n"
+            "<task-notification><task-id>x</task-id><status>completed</status></task-notification>")
+    out = strip_wrappers(text)
+    assert "task-notification" not in out and "completed" not in out
+    assert out.strip() == "real design question about retries"
+
+
 def test_distiller_renders_stripped():
     from alluvia.models import Message, RawSession, content_hash, session_id
     from alluvia.llm.client import FakeLLM

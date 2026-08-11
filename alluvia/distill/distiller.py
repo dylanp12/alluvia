@@ -2,19 +2,24 @@ from __future__ import annotations
 import hashlib
 from alluvia.llm.client import LLM
 from alluvia.models import Note, RawSession
-from alluvia.distill.scrub import scrub_secrets, strip_wrappers, is_meta_message
+from alluvia.distill.scrub import redact, strip_wrappers, is_meta_message, is_process_note
 
 _SYSTEM = (
     "You extract atomic, reusable knowledge from a developer's AI chat session. "
     "Return JSON: {\"notes\":[{\"kind\":one of idea|decision|question|problem|insight,"
     "\"text\":a single self-contained sentence,\"span\":\"msg:<index>\" of the source message}]}. "
     "Keep only substantive DOMAIN knowledge: technical ideas, decisions, problems, "
-    "questions, insights. IGNORE conversation-process content entirely — pauses, "
-    "waiting-for-user, continuation/permission requests, session management, tool "
-    "or hook chatter, and anything about the assistant's own workflow. "
-    "Do not invent content."
+    "questions, insights. A 'decision' is a DURABLE choice about the domain with a "
+    "consequence (e.g. \"use Postgres over SQLite\") — NOT a status report or a step "
+    "the assistant took. NEVER extract statements about the assistant's OWN actions, "
+    "workflow, waiting, permissions, tool calls, or task state: pauses, "
+    "waiting-for-user, continuation/permission requests, session management, tool or "
+    "hook chatter. If a sentence's subject is the assistant and its predicate is a "
+    "process step, drop it. Do not invent content."
 )
 
+
+PROMPT_HASH = hashlib.sha256(_SYSTEM.encode("utf-8")).hexdigest()[:16]
 
 MSG_CHAR_CAP = 2000        # per-message cap: long tool dumps add noise, not signal
 RENDER_CHAR_CAP = 16000    # total prompt cap: keeps big sessions inside context/TPM
@@ -31,7 +36,7 @@ def _render(session: RawSession) -> str:
             continue                      # wrapper-only message: skip entirely
         if len(cleaned) > MSG_CHAR_CAP:
             cleaned = cleaned[:MSG_CHAR_CAP] + " …[truncated]"
-        line = f"msg:{i} [{m.role}] {scrub_secrets(cleaned)}"
+        line = f"msg:{i} [{m.role}] {redact(cleaned)}"
         if total + len(line) > RENDER_CHAR_CAP:
             lines.append("…[session truncated for length]")
             break
@@ -58,6 +63,8 @@ class Distiller:
             text = (rn.get("text") or "").strip()
             if not text:
                 continue
+            if is_process_note(text):
+                continue                      # agent-process chatter the LLM kept: not domain knowledge
             nid = _note_id(session.id, text)
             if nid in seen:
                 continue

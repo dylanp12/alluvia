@@ -1,5 +1,62 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.0 — 2026-08-10
+
+Your memory can leave the laptop now — opt in to Alluvia Cloud and a team shares one map.
+
+- **`alluvia cloud`** — opt-in sync of your derived memory to Alluvia Cloud, so a
+  team shares one map. `login` signs in through your browser (a one-shot local
+  listener catches the token); `sync` previews exactly what will leave first —
+  notes, themes, links, and session metadata, every text secret-scrubbed — and raw
+  transcripts stay on your machine unless you opt a source into `raw`; plus
+  `status` and `logout`.
+- **New sources** — `alluvia ingest --source` now covers the Cline family (`cline`, `kilo-code`,
+  `roo-code`), **`opencode`**, **`codex`** (OpenAI Codex CLI), and **`gemini`** (Gemini CLI) — reading
+  each tool's own on-disk history. A shared adapter toolkit makes new sources thin to add.
+- **Cleaner distillation** — the distiller no longer surfaces the assistant's own
+  process/state chatter (waiting-for-input, "no autonomous work", tool/permission
+  narration) as notes, and now also filters **runtime-injected scaffolding** that lands in
+  user-role slots (system reminders, command echoes, background task notifications,
+  continuation summaries) so harness noise isn't attributed to the human. Secrets **and
+  common PII** (emails, JWTs) are redacted before any text leaves the machine. The source
+  contract (`docs/SOURCES.md`) now spells out what senders should strip and exclude.
+- **`alluvia loops`** — problems you recorded and never resolved: no fix
+  decision points at them, in your notes or your confirmed findings. Pure
+  lookup, zero LLM spend, each with age, theme, and source.
+- **Rate your tensions** — `alluvia tensions --keep <id>` confirms a finding
+  and promotes it into your map as a confirmed relation (with a
+  human-confirmed judgment event carrying the evidence); `--dismiss <id>`
+  records the verdict. Predictions never become part of your map without
+  your say-so.
+- **MCP `tensions_now`** — the typed findings, readable from Claude Code /
+  Cursor mid-conversation. Read-only; spends nothing; rating stays in the
+  CLI.
+- The relation vocabulary gains **transfers**: a solution from one area that
+  structurally applies to a problem in another.
+- **`alluvia tensions`** — a new lens for the map's disagreements:
+  contradictions, superseded decisions, and recurring problems, each with a
+  confidence, a one-sentence why, and the exact source sessions as evidence.
+  `--scan 20` classifies your top connections first (one LLM call per pair,
+  Governor-managed). Findings are predictions you can inspect — never silent
+  rewrites of your map.
+- **`alluvia export-graph`** — export your whole knowledge map as a portable,
+  open bundle: typed nodes and provenance-carrying events (gzipped JSONL plus
+  a versioned manifest). Your data was always yours; now it travels.
+  `--no-judgments` leaves your ratings out.
+- **Extraction provenance** — every distill pass now records which model
+  produced it; new notes carry a pointer to their extraction run. Exports
+  include it, so every derived fact can say who wrote it down and from where.
+- **Selection transparency** — propose and digest now record their full
+  considered pool (what was shown, what was scored but cut, at which rank,
+  under which policy) locally. Nothing leaves your machine; future ranking
+  improvements can be judged against honest records instead of survivor bias.
+- **Digest exploration slot** — every 4th digest trades one connection pick
+  for a long-shot from beyond the usual cutoff, marked `EXPLORE:`. Tune with
+  `ALLUVIA_DIGEST_EXPLORE_EVERY` (0 disables).
+
+
 ## 0.4.0 — 2026-07-17
 
 Recall becomes the front door — and any source can feed it.

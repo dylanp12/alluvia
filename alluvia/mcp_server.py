@@ -260,6 +260,31 @@ def recall_now_impl(deps, problem: str, include_handoff: bool = True,
         return {"error": str(e)}
 
 
+def tensions_now_impl(deps, limit: int = 10) -> dict:
+    """Read-only; never spends the user's LLM budget (stored findings only)."""
+    try:
+        limit = _cap(limit)
+        user = config.DEFAULT_USER
+        notes = {n.id: n for n in deps.repo.get_notes(user)}
+        cands = [c for c in deps.repo.list_candidates(user)
+                 if c["status"] in ("pending", "confirmed")]
+        cands.sort(key=lambda c: -(c["score"] or 0))
+        findings = []
+        for c in cands[:limit]:
+            a, b = notes.get(c["subject_id"]), notes.get(c["object_id"])
+            if not a or not b:
+                continue
+            findings.append({
+                "id": c["id"], "relation": c["relation"],
+                "confidence": c["score"], "status": c["status"],
+                "why": _t(c["why"], 200),
+                "subject": _note_json(a), "object": _note_json(b),
+                "evidence": c["evidence"][:4]})
+        return {"findings": findings, "limit": limit}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 def get_digest_impl(deps) -> dict:
     try:
         import os
@@ -350,6 +375,16 @@ def build_server(deps: SiftDeps | None = None):
         ready-to-use handoff block. Read-only; spends nothing."""
         return recall_now_impl(d, problem=problem,
                                include_handoff=include_handoff, limit=limit)
+
+    @mcp.tool()
+    def tensions_now(limit: int = 10) -> dict:
+        """Typed findings from the user's map: contradictions, superseded
+        decisions, recurring problems, cross-area transfers — each with
+        confidence, rationale, and source evidence. These are PREDICTIONS
+        awaiting the user's judgment (rate in the CLI with
+        `alluvia tensions --keep/--dismiss <id>`). Read-only; spends
+        nothing."""
+        return tensions_now_impl(d, limit=limit)
 
     @mcp.tool()
     def get_digest() -> dict:

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import hashlib
 import logging
 from collections import defaultdict
 
@@ -16,7 +17,7 @@ from alluvia.engine.embed import Embedder
 from alluvia.engine.cluster import cluster
 from alluvia.engine.label import label_cluster
 from alluvia.distill.distiller import Distiller
-from alluvia.models import Link, Note, Theme, to_utc
+from alluvia.models import ExtractionRun, Link, Note, Theme, to_utc
 from alluvia.store.repo import Repo
 from datetime import datetime, timedelta, timezone
 from alluvia.engine.link import compute_links
@@ -92,7 +93,7 @@ class Engine:
         rep = reporter or NullReporter()
         now = now or datetime.now(timezone.utc)
         stats: dict = {"at": now.isoformat(), "retry_at": None}
-        stats["distill"] = self._distill_new(user_id, stats, reporter=rep)
+        stats["distill"] = self._distill_new(user_id, stats, reporter=rep, now=now)
         self._embed_new(user_id, reporter=rep)
         stats["themes"] = self._rebuild_themes(user_id, now, stats, reporter=rep)
         rep.start("linking ideas across themes")
@@ -128,9 +129,10 @@ class Engine:
         return int(raw) if raw is not None else self.FIRST_RUN_CAP
 
     def _distill_new(self, user_id: str, stats: dict | None = None,
-                     reporter=None) -> dict:
+                     reporter=None, now: datetime | None = None) -> dict:
         stats = stats if stats is not None else {}
         rep = reporter or NullReporter()
+        now = now or datetime.now(timezone.utc)
         todo = pending_distill(self.repo, user_id)
         d = {"todo": len(todo), "ok": 0, "zero_note": 0, "failed": 0,
              "cold": False, "deferred": 0}
@@ -147,7 +149,11 @@ class Engine:
         for n, s in enumerate(todo, 1):
             rep.advance()
             try:
-                self.repo.upsert_notes(self.distiller.distill(s))
+                notes = self.distiller.distill(s)
+                run = self._record_run(user_id, s.id, now)
+                for note in notes:
+                    note.run_id = run.id
+                self.repo.upsert_notes(notes)
                 self.repo.mark_distilled(user_id, s.id)   # zero notes counts as done
                 consecutive = 0
                 d["ok"] += 1
@@ -185,6 +191,22 @@ class Engine:
                 log.info("distill progress: %d/%d sessions", n, len(todo))
         rep.finish()
         return d
+
+    def _record_run(self, user_id: str, session_id: str, now: datetime):
+        """Provenance: one row per distill pass, carrying the RESOLVED model
+        (governor-observed; plain LLMs record None)."""
+        from alluvia.config import PIPELINE_VERSION
+        from alluvia.distill.distiller import PROMPT_HASH
+        rid = "run:" + hashlib.sha256(
+            f"{session_id}|{PIPELINE_VERSION}|{now.isoformat()}".encode("utf-8")
+        ).hexdigest()[:16]
+        run = ExtractionRun(
+            id=rid, user_id=user_id, session_id=session_id, stage="distill",
+            model=getattr(self.distiller.llm, "last_model", None),
+            pipeline_version=PIPELINE_VERSION, prompt_hash=PROMPT_HASH,
+            created_at=now.isoformat())
+        self.repo.record_extraction_run(run)
+        return run
 
     EMBED_BATCH = 32     # batched so progress moves (and memory stays flat)
 
@@ -306,6 +328,16 @@ class Engine:
             if best_note in t.note_ids:
                 return t
         return None
+
+    def type_top_links(self, user_id: str, now: datetime | None = None,
+                       limit: int = 20) -> dict:
+        """Classify top surprise links into typed relation candidates
+        (CONTRADICTS/SUPERSEDES/ADDRESSES/RECURS_AS) — predictions in the
+        candidates store, never facts."""
+        from alluvia.engine.relate import type_links
+        now = now or datetime.now(timezone.utc)
+        return type_links(self.repo, user_id, self._llm_for("relate"), now,
+                          limit=limit)
 
     _WHY_SYSTEM = ('Explain in ONE short sentence why these two developer notes are '
                    'related. Return JSON {"why": "..."}.')

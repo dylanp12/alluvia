@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 NOVELTY_CEIL = 0.90          # max cosine vs any source note before it's a paraphrase
 EXCERPT_CHAR_CAP = 400       # per raw-span excerpt
 CONTEXT_CHAR_CAP = 6000      # total grounding context
+POLICY_VERSION = "select-v1"  # stamped on exposure slates: which selection
+#                               heuristic produced what was (not) shown
 
 _GEN_SYSTEM = (
     "You propose ONE new, concrete next step from a developer's own prior notes. "
@@ -46,15 +48,35 @@ def _source_hash(notes: list[Note]) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def candidates(repo: Repo, user_id: str, limit: int = 10) -> list[Candidate]:
+def candidates(repo: Repo, user_id: str, limit: int = 10,
+               surface: str | None = None) -> list[Candidate]:
     """Top surprise links, then most-circled OPEN themes — minus material
     already proposed-from (source_hash dedup: re-propose only when the
-    grounding notes change)."""
+    grounding notes change).
+
+    With `surface` set, the FULL considered pool (selected or not, with score
+    and rank) is persisted as an exposure slate — the record that makes future
+    ranking trainable without inheriting this heuristic's blind spots."""
     notes = {n.id: n for n in repo.get_notes(user_id)}
     seen = repo.proposal_source_hashes(user_id)
     out: list[Candidate] = []
+    considered: list[dict] = []
 
+    def _done() -> list[Candidate]:
+        if surface is not None:
+            selected = {c.source_ref for c in out}
+            items = [dict(it, selected=it["ref"] in selected)
+                     for it in considered]
+            repo.insert_slate(
+                user_id, surface=surface, policy_version=POLICY_VERSION,
+                created_at=datetime.now(timezone.utc).isoformat(), items=items)
+        return out
+
+    rank = 0
     for link in repo.list_links(user_id, limit=limit * 2):
+        rank += 1
+        considered.append({"kind": "link", "ref": link.id,
+                            "score": link.weight, "rank": rank})
         ids = tuple(i for i in (link.from_note_id, link.to_note_id) if i in notes)
         if len(ids) < 2:
             continue
@@ -62,7 +84,7 @@ def candidates(repo: Repo, user_id: str, limit: int = 10) -> list[Candidate]:
             continue
         out.append(Candidate(kind="link", source_ref=link.id, note_ids=ids))
         if len(out) >= limit:
-            return out
+            return _done()
 
     def span_days(t):
         if t.first_seen and t.last_seen:
@@ -74,6 +96,10 @@ def candidates(repo: Repo, user_id: str, limit: int = 10) -> list[Candidate]:
               if t.status == "open" and t.label.lower() not in muted]
     themes.sort(key=lambda t: t.session_count * (span_days(t) + 1), reverse=True)
     for t in themes:
+        rank += 1
+        considered.append({"kind": "theme", "ref": t.id,
+                            "score": t.session_count * (span_days(t) + 1),
+                            "rank": rank})
         ids = tuple(i for i in t.note_ids if i in notes)
         if not ids:
             continue
@@ -82,7 +108,7 @@ def candidates(repo: Repo, user_id: str, limit: int = 10) -> list[Candidate]:
         out.append(Candidate(kind="theme", source_ref=t.id, note_ids=ids))
         if len(out) >= limit:
             break
-    return out
+    return _done()
 
 
 def _excerpt(repo: Repo, user_id: str, note: Note) -> str | None:

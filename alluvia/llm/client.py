@@ -100,11 +100,39 @@ def _default_health():
     return _process_health
 
 
+def _managed_distill_llm(health=None, on_wait=None):
+    """Distill LLM routed through Alluvia's managed gateway under the team's virtual
+    key (opt-in). None when not logged in or the key can't be fetched, so make_llm
+    falls back to the normal BYOK/local path. Transcripts are already secret+PII
+    scrubbed before they reach any LLM (distill/scrub.redact)."""
+    import logging
+    from alluvia import cloudclient
+    sess = cloudclient.load_session()
+    if not sess or not sess.get("token") or not sess.get("url"):
+        return None
+    info = cloudclient.fetch_distill_key(sess["url"], sess["token"])
+    if not info or not info.get("key") or not info.get("base_url"):
+        return None
+    from alluvia.llm.governor import Governor
+    model = info.get("model") or "alluvia-distill"
+    adapter = OpenAICompatLLM(model, api_key=info["key"], base_url=info["base_url"])
+    logging.getLogger("alluvia").info(
+        "managed distillation active: scrubbed + PII-redacted transcripts are distilled "
+        "via Alluvia's gateway under your team's budget-capped key")
+    return Governor("managed-distill", [(model, adapter)],
+                    store=health if health is not None else _default_health(),
+                    patience=config.llm_patience(), on_wait=on_wait)
+
+
 def make_llm(role: str | None = None, health=None, on_wait=None) -> LLM:
     """Role-aware factory: ALLUVIA_LLM_MODEL_<ROLE> -> ALLUVIA_LLM_MODEL -> provider
     default, expanded to the role's fallthrough chain and wrapped in a
     Governor (backoff, per-model breakers, chain fallthrough — see
     llm/governor.py). Roles: distill, label, status, why, propose."""
+    if role == "distill" and config.managed_distillation():
+        managed = _managed_distill_llm(health, on_wait)
+        if managed is not None:
+            return managed
     from alluvia.llm.governor import Governor
     provider = config.llm_provider()
     if provider not in ("anthropic", "openai", "groq"):
