@@ -18,6 +18,16 @@ def test_is_meta_message_matches_injected_scaffolding():
     assert not is_meta_message("continue the auth refactor we discussed earlier")
 
 
+def test_is_meta_message_matches_the_auto_summary_request():
+    # Claude Code writes its title/summary prompt into the session JSONL;
+    # found quoted verbatim by a receipt in the 2026-08-18 live e2e
+    assert is_meta_message(
+        "Context: This summary will be shown in a list to help users and "
+        "Claude choose which conversations are relevant.\n\nPlease write a "
+        "concise, factual summary of this conversation.")
+    assert not is_meta_message("write a concise summary of the incident for the postmortem")
+
+
 def test_render_drops_meta_messages_keeps_real_ones():
     msgs = [
         Message(role="user", text="Stop hook feedback:\nClaude evaluator determined X."),

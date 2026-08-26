@@ -15,14 +15,16 @@ LLM_PROVIDER = "groq"
 _DEFAULT_MODELS = {
     "anthropic": "claude-haiku-4-5-20251001",
     "openai": "gpt-4o-mini",
-    "groq": "llama-3.3-70b-versatile",
+    "groq": "openai/gpt-oss-120b",
 }
 # Fallthrough chains (head first). On Groq's free tier each model has its own
 # daily budget, so falling through to a sibling keeps the map alive when the
 # head model hits a wall. Paid providers default to a single model.
+# Groq retired its Meta Llama models (404 model_not_found as of 2026-08);
+# roster = live catalog models that handle strict-JSON extraction.
 _DEFAULT_CHAINS = {
-    "groq": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b",
-             "llama-3.1-8b-instant"],
+    "groq": ["openai/gpt-oss-120b", "qwen/qwen3.6-27b",
+             "openai/gpt-oss-20b"],
     "openai": ["gpt-4o-mini"],
     "anthropic": ["claude-haiku-4-5-20251001"],
 }

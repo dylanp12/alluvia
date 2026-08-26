@@ -249,7 +249,10 @@ def recall_now_impl(deps, problem: str, include_handoff: bool = True,
             "hits": [{"kind": h.kind, "title": _t(h.title, 120),
                       "summary": _t(h.summary), "why": _t(h.why, 250),
                       "status": h.status, "sources": h.sources[:4],
-                      "cites": h.cites[:8], "git_ref": _t(h.git_ref, 160)}
+                      "cites": h.cites[:8],
+                      "receipts": [{"note": r["note"], "quote": _t(r["quote"], 300)}
+                                   for r in h.receipts],
+                      "git_ref": _t(h.git_ref, 160)}
                      for h in hits],
             "warnings": recall_warnings(deps.repo),
         }

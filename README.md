@@ -208,7 +208,9 @@ where the cross-tool bridges come from.
 
 ### Any source, one contract
 
-Beyond the built-in adapters, anything that writes a simple
+Built-in adapters cover **Claude Code, Cursor, Codex CLI, Gemini CLI,
+OpenCode, the Cline family (Cline, Roo, Kilo), and ChatGPT exports.** Beyond
+those, anything that writes a simple
 [normalized-session JSONL](docs/SOURCES.md) is a source:
 
 ```bash
@@ -218,6 +220,22 @@ alluvia ingest --source jsonl --path ./exports/
 That's how **multi-machine** setups work with no cloud (aggregate your
 hosts' histories into one directory), and how tools we don't ship a parser
 for arrive already normalized. Community feeders welcome.
+
+## For teams — Alluvia Cloud
+
+The same pipeline, multiplayer. Teams opt in to sync **distilled notes only**
+(raw history still never leaves each machine) into a shared index, so anyone
+can ask what the team already figured out — and get the answer with receipts:
+
+> *"Yes — that was fixed in March, in the token-refresh module, by pinning the
+> clock skew. Here are the sessions."* — or an honest *"no record of that."*
+
+Team recall with citations, verified answers (confirm one, it leads for
+everyone after), and a living registry of decisions — including what
+superseded them. Hosted at [alluvia.dev](https://alluvia.dev); free for
+founding teams during early access.
+
+---
 
 MIT · built local-first on purpose: the research this project started from
 found that for developers, trust in this category is *owned data or nothing*.

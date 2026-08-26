@@ -6,7 +6,7 @@ def test_role_env_beats_global_beats_default(monkeypatch):
     monkeypatch.setenv("ALLUVIA_LLM_PROVIDER", "groq")
     monkeypatch.delenv("ALLUVIA_LLM_MODEL", raising=False)
     monkeypatch.delenv("ALLUVIA_LLM_MODEL_PROPOSE", raising=False)
-    assert make_llm(role="propose").model == "llama-3.3-70b-versatile"  # provider default
+    assert make_llm(role="propose").model == "openai/gpt-oss-120b"  # provider default
     monkeypatch.setenv("ALLUVIA_LLM_MODEL", "global-model")
     assert make_llm(role="propose").model == "global-model"             # global
     monkeypatch.setenv("ALLUVIA_LLM_MODEL_PROPOSE", "propose-model")

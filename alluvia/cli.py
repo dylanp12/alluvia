@@ -1002,6 +1002,8 @@ def recall(
         typer.echo(f"{i}. {h.title}{status}{span}")
         typer.echo(f"   {h.summary}")
         typer.echo(f"   why: {h.why}")
+        if h.receipts:
+            typer.echo(f'   receipt: "{h.receipts[0]["quote"][:200]}"')
         if h.git_ref:
             typer.echo(f"   {h.git_ref}")
         typer.echo(f"   sources: {'; '.join(h.sources)}")

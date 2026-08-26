@@ -18,6 +18,10 @@ def _dts(d: datetime | None) -> str | None:
     return d.isoformat() if d else None
 
 
+from alluvia.lexical import lex_tokens as _lex_tokens
+from alluvia.lexical import required_count as _lex_required
+
+
 class Repo:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
@@ -91,6 +95,12 @@ class Repo:
                 (n.id, n.user_id, n.session_id, n.span_ref, n.kind, n.text,
                  _dts(n.created_at), n.canonical_id, PIPELINE_VERSION, n.run_id),
             )
+            self.conn.execute(
+                "DELETE FROM notes_fts WHERE user_id=? AND note_id=?",
+                (n.user_id, n.id))
+            self.conn.execute(
+                "INSERT INTO notes_fts(note_id, user_id, text) VALUES (?,?,?)",
+                (n.id, n.user_id, n.text))
         self.conn.commit()
 
     def get_notes(self, user_id: str) -> list[Note]:
@@ -286,6 +296,51 @@ class Repo:
 
     def search_notes(self, user_id: str, vec: list[float], k: int) -> list[tuple[str, float]]:
         return self._index().search(user_id, vec, k)
+
+    def search_notes_lexical(self, user_id: str, query: str,
+                             k: int = 25) -> list[tuple[str, float]]:
+        """Exact-match channel of hybrid recall: BM25 over notes_fts.
+
+        Query text is reduced to quoted literal tokens (never parsed as FTS5
+        syntax), OR-matched, then thresholded: a note must contain every
+        token of a 1–2-token query, or at least half of a longer one —
+        one shared word is not an answer."""
+        toks = _lex_tokens(query)
+        if not toks:
+            return []
+        self._sync_fts(user_id)
+        match = " OR ".join(f'"{t}"' for t in toks)
+        rows = self.conn.execute(
+            "SELECT note_id, text, bm25(notes_fts) AS r FROM notes_fts "
+            "WHERE notes_fts MATCH ? AND user_id=? ORDER BY r LIMIT ?",
+            (match, user_id, k * 3)).fetchall()
+        required = _lex_required(toks)
+        out = []
+        for nid, text, r in rows:
+            low = text.lower()
+            if sum(1 for t in toks if t in low) >= required:
+                out.append((nid, -float(r)))     # bm25: smaller is better
+        return out[:k]
+
+    def note_excerpt(self, user_id: str, note: Note) -> str | None:
+        """The receipt seam: recall reaches verbatim quotes through the
+        store, so team stores can answer from synced excerpts instead."""
+        from alluvia.excerpts import note_excerpt
+        return note_excerpt(self, user_id, note)
+
+    def _sync_fts(self, user_id: str) -> None:
+        """Rebuild this user's FTS rows when they disagree with notes —
+        covers stores created before notes_fts existed."""
+        n = self.conn.execute(
+            "SELECT COUNT(*) FROM notes WHERE user_id=?", (user_id,)).fetchone()[0]
+        f = self.conn.execute(
+            "SELECT COUNT(*) FROM notes_fts WHERE user_id=?", (user_id,)).fetchone()[0]
+        if f != n:
+            self.conn.execute("DELETE FROM notes_fts WHERE user_id=?", (user_id,))
+            self.conn.execute(
+                "INSERT INTO notes_fts(note_id, user_id, text) "
+                "SELECT id, user_id, text FROM notes WHERE user_id=?", (user_id,))
+            self.conn.commit()
 
     # ---- themes (full-rebuild each refresh) ----
     def replace_themes(self, user_id: str, themes: list[Theme]) -> None:

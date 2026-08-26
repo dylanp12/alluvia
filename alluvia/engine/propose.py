@@ -112,15 +112,8 @@ def candidates(repo: Repo, user_id: str, limit: int = 10,
 
 
 def _excerpt(repo: Repo, user_id: str, note: Note) -> str | None:
-    try:
-        from alluvia.distill.scrub import strip_wrappers
-        idx = int(note.span_ref.split(":", 1)[1])
-        session = repo.get_session(user_id, note.session_id)
-        if session and 0 <= idx < len(session.messages):
-            return strip_wrappers(session.messages[idx].text)[:EXCERPT_CHAR_CAP]
-    except (ValueError, IndexError, AttributeError):
-        pass
-    return None
+    from alluvia.excerpts import note_excerpt
+    return note_excerpt(repo, user_id, note, cap=EXCERPT_CHAR_CAP)
 
 
 def _normalize_cites(cites: list[str], valid_ids: set[str]) -> list[str]:

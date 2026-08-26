@@ -241,4 +241,13 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
         if col not in hcols:
             conn.execute(f"ALTER TABLE llm_health ADD COLUMN {col} "
                          f"INTEGER NOT NULL DEFAULT 0")
+    # Lexical channel of hybrid recall. tokenchars keeps snake_case
+    # identifiers and error codes whole; '/' and '.' still split, so path
+    # queries match by segment ("refresh.py" → refresh, py). Standalone
+    # (not external-content): notes.id is TEXT, and the copy is tiny.
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5("
+        "note_id UNINDEXED, user_id UNINDEXED, text, "
+        "tokenize = \"unicode61 tokenchars '_-'\")"
+    )
     conn.commit()

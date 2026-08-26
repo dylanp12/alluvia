@@ -71,6 +71,8 @@ MESSAGE_META_MARKERS = (
     "Claude evaluator determined",
     "[SYSTEM NOTIFICATION - NOT USER INPUT]",
     "This session is being continued from a previous conversation",
+    # Claude Code's auto-title/summary prompt, written into the session JSONL
+    "This summary will be shown in a list",
 )
 
 

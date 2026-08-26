@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+## 0.6.0 — 2026-08-18
+
+Recall grew up: ask a question, get the answer — with the receipts.
+
+- **Groq defaults work again** — Groq retired its Meta Llama models (`llama-3.3-70b-versatile`,
+  `llama-3.1-8b-instant` now 404), which broke distillation on stock config. The default
+  chain is now `openai/gpt-oss-120b → qwen/qwen3.6-27b → openai/gpt-oss-20b`, all live
+  on the free tier. Found by a live end-to-end run, not a bug report.
+- **Receipts never quote harness scaffolding** — Claude Code's auto-summary prompt
+  (written into session files) could surface verbatim as a recall receipt and reach the
+  distiller. It's now a recognized meta marker, and the excerpt slicer declines to quote
+  any meta message — no receipt beats a garbage receipt.
+- **Hybrid recall** — `alluvia recall` (and the MCP + team recall built on it) now
+  pairs vector search with an exact-match channel: error strings, file paths, and
+  snake_case identifiers find their note even where embeddings go blind
+  (`ECONNREFUSED`, `auth/refresh.py`, `DATABASE_URL`). A note matched by both
+  channels rises; one shared word is not a match; still retrieval-only, still zero
+  LLM spend. Existing stores index themselves on first search — nothing to migrate.
+- **Recall eval gate** — a golden query set (semantic · exact-match · must-refuse)
+  runs with the test suite; retrieval changes must beat the dense-only baseline on
+  exact-match and never regress semantics or honest refusal.
+- **Time-scoped recall** — recall now understands time: `alluvia recall "the auth
+  fix last tuesday"` searches only that window ("last week", "in march",
+  "march 2025", "3 days ago", "since march", "before march", "2025" all work),
+  the time words stop polluting matching, and an empty window answers honestly
+  empty instead of surfacing the wrong era. Undated notes never fake membership
+  in a window. Without a time expression, freshness only breaks ties — a
+  14-month-old cross-tool rediscovery still outranks a weak fresh match.
+  Deterministic parser, no LLM, works identically in team recall.
+- **Receipts** — every recall hit now carries the verbatim quote behind its cites,
+  sliced fresh from the raw session (wrapper-stripped, secret-redacted, capped).
+  The CLI prints it, `--handoff` pastes it, and the MCP `recall_now` returns it,
+  so an answer is checkable at a glance. Team recall serves receipts from synced
+  excerpts (for sources opted into excerpt/raw sync), and cloud synthesis grounds
+  its answer on the verbatim quote rather than a paraphrase. Proposal grounding
+  now runs through the same redacted excerpt path.
+
 ## 0.5.0 — 2026-08-10
 
 Your memory can leave the laptop now — opt in to Alluvia Cloud and a team shares one map.

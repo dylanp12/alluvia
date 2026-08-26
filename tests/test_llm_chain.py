@@ -17,7 +17,7 @@ def _groq(monkeypatch):
 def test_groq_default_chain_has_fallthrough(monkeypatch):
     _groq(monkeypatch)
     chain = config.llm_chain("groq", "label")
-    assert chain[0] == "llama-3.3-70b-versatile"        # head = provider default
+    assert chain[0] == "openai/gpt-oss-120b"        # head = provider default
     assert len(chain) >= 2                              # real fallbacks behind it
 
 
@@ -38,7 +38,7 @@ def test_chain_env_replaces_whole_chain(monkeypatch):
 
 def test_propose_never_falls_through(monkeypatch):
     _groq(monkeypatch)
-    assert config.llm_chain("groq", "propose") == ["llama-3.3-70b-versatile"]
+    assert config.llm_chain("groq", "propose") == ["openai/gpt-oss-120b"]
     monkeypatch.setenv("ALLUVIA_LLM_MODEL_PROPOSE", "strong-model")
     assert config.llm_chain("groq", "propose") == ["strong-model"]
 
@@ -54,7 +54,7 @@ def test_make_llm_returns_governed_chain(monkeypatch):
     llm = make_llm(role="label")
     assert isinstance(llm, Governor)
     assert llm.provider == "groq"
-    assert llm.model == "llama-3.3-70b-versatile"
+    assert llm.model == "openai/gpt-oss-120b"
     models = [m for m, _ in llm.candidates]
     assert models == config.llm_chain("groq", "label")
     adapter = llm.candidates[0][1]
