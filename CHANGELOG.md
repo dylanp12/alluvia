@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+## 0.6.1 — 2026-09-02
+
+The docs and the brand caught up with the product: a README with receipts, and a kit set on paper.
+
+- **README rewritten for the 0.6 product** — recall with receipts, hybrid and
+  time-scoped search, the honest refusal, the ten MCP tools, and the lenses that
+  arrived since 0.3 (`loops`, `tensions`, `export-graph`, `mute`, `alluvia cloud`).
+  The demo replays now come from alluvia.dev and match the current identity;
+  team sign-ups are noted as open.
+- **Brand kit brought up to the current identity** — paper, ink, and a gold that
+  passes AA when it has to be read as text; Newsreader, Geist, and JetBrains Mono;
+  recolored marks and lockups, a regenerated favicon and social preview.
+  `docs/BRAND.md` and `assets/alluvia-tokens.css` are the source of truth. The
+  localhost dashboard still renders the previous palette; it migrates in a
+  later release.
+- **`ingest --source` help lists every adapter** — `codex`, `gemini`, and
+  `opencode` were accepted but missing from the help text (#21).
+
 ## 0.6.0 — 2026-08-18
 
 Recall grew up: ask a question, get the answer — with the receipts.

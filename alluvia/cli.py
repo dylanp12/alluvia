@@ -109,7 +109,7 @@ def build_engine(repo: Repo, reporter=None):
 @app.command()
 def ingest(
     source: str = typer.Option("claude-code", "--source",
-                               help="claude-code | cursor | windsurf | antigravity | cline | kilo-code | roo-code | chatgpt-export | jsonl (docs/SOURCES.md)"),
+                               help="claude-code | cursor | codex | gemini | opencode | cline | kilo-code | roo-code | windsurf | antigravity | chatgpt-export | jsonl (docs/SOURCES.md)"),
     path: str = typer.Option(None, "--path",
                              help="Root/logs dir (claude-code), fork root override, "
                                   "or export ZIP/dir (chatgpt-export)"),
