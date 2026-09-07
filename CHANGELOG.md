@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 0.7.1 — 2026-09-06
+
+- **Windows paths.** A repository path recorded on another machine or OS is kept
+  verbatim instead of being re-separated, project keys agree whether a path
+  was written with `/` or `\`, and `[action]` lines are relative to the
+  session's working directory on Windows-shaped transcripts too. Found by the
+  public CI on Windows the moment 0.7.0 shipped.
+
 ## 0.7.0 — 2026-09-06
 
 Your agent remembers this repo, and it will not lie about it.

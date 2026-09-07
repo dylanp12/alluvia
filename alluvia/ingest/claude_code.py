@@ -32,10 +32,14 @@ _ACTION_ARG_CAP = 120
 
 
 def _rel(path: str, cwd: str | None) -> str:
+    """Path relative to the session's working directory, whichever separator
+    the transcript uses; paths outside it stay absolute."""
     if cwd and isinstance(path, str):
-        base = cwd.rstrip("/\\") + "/"
-        if path.startswith(base):
-            return path[len(base):]
+        root = cwd.rstrip("/\\")
+        for sep in ("/", "\\"):
+            base = root + sep
+            if path.startswith(base):
+                return path[len(base):]
     return path
 
 

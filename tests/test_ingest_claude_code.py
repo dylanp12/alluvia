@@ -136,3 +136,11 @@ def test_harness_injected_user_slot_records_are_not_the_users_thread(tmp_path):
         + _rec("assistant", [{"type": "text", "text": "On it."}], cwd="/w") + "\n")
     s = list(ClaudeCodeAdapter(str(tmp_path)).read())[0]
     assert [m.text for m in s.messages] == ["make recall honest", "On it."]
+
+
+def test_action_paths_relative_on_windows_shaped_transcripts():
+    from alluvia.ingest.claude_code import _rel
+    assert _rel("C:\\proj\\src\\a.py", "C:\\proj") == "src\\a.py"
+    assert _rel("C:\\proj\\src\\a.py", "C:\\proj\\") == "src\\a.py"
+    assert _rel("/w/src/a.py", "/w") == "src/a.py"
+    assert _rel("/elsewhere/a.py", "/w") == "/elsewhere/a.py"

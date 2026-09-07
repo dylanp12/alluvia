@@ -1,7 +1,7 @@
 {
   "name": "alluvia",
   "description": "Your agent remembers this repo: decisions, open loops, and what was tried, with receipts. Says so when there is no record.",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "author": { "name": "Dylan Parent" },
   "homepage": "https://alluvia.dev",
   "repository": "https://github.com/dylanp12/alluvia",

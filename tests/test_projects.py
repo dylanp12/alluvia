@@ -24,3 +24,16 @@ def test_key_and_name_are_stable():
     assert len(project_key("/work/acme")) == 12
     assert project_name("/work/acme/") == "acme"
     assert project_root("") is None and project_root(None) is None
+
+
+def test_foreign_paths_are_verbatim_not_normalized():
+    """A path recorded on another machine (or OS) is an opaque key: never
+    collapse, re-separate, or otherwise rewrite it. Only a trailing separator
+    is dropped so 'x/' and 'x' agree."""
+    assert project_root("/home/other/box//repo/./sub", isdir=lambda p: False) == "/home/other/box//repo/./sub"
+    assert project_root("C:\\Users\\x\\repo\\", isdir=lambda p: False) == "C:\\Users\\x\\repo"
+
+
+def test_key_and_name_agree_across_separators():
+    assert project_key("C:\\work\\acme") == project_key("C:/work/acme") == project_key("C:/work/acme/")
+    assert project_name("C:\\work\\acme") == "acme"

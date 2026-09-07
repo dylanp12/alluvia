@@ -86,7 +86,10 @@ def test_recall_cli_says_no_record_and_scopes_here(repo, tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     r = CliRunner().invoke(cli.app, ["recall", "auth token", "--here", "--json"])
-    assert r.exit_code == 0 and '"scope"' in r.output and str(tmp_path) in r.output
+    assert r.exit_code == 0
+    import json, os
+    scope = json.loads(r.output)["scope"]
+    assert os.path.normcase(scope) == os.path.normcase(str(tmp_path))   # Windows escapes backslashes in JSON
 
 
 def test_forget_cli_round_trip(repo, monkeypatch):
