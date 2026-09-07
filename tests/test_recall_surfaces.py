@@ -72,3 +72,32 @@ def test_bare_alluvia_empty_store_points_to_quickstart(tmp_path, monkeypatch):
     r = runner.invoke(cli.app, [])
     assert r.exit_code == 0
     assert "init" in r.output
+
+
+def test_recall_cli_says_no_record_and_scopes_here(repo, tmp_path, monkeypatch):
+    import alluvia.cli as cli
+    from typer.testing import CliRunner
+    from tests.test_recall_ranking import RealisticEmbedder
+    monkeypatch.setattr(cli, "_repo", lambda: repo)
+    monkeypatch.setattr(cli, "_recall_embedder", lambda: RealisticEmbedder())
+    r = CliRunner().invoke(cli.app, ["recall", "lasagna recipe"])
+    assert r.exit_code == 0 and "no record" in r.output.lower()
+    # --here resolves the project from the working directory
+    (tmp_path / ".git").mkdir()
+    monkeypatch.chdir(tmp_path)
+    r = CliRunner().invoke(cli.app, ["recall", "auth token", "--here", "--json"])
+    assert r.exit_code == 0 and '"scope"' in r.output and str(tmp_path) in r.output
+
+
+def test_forget_cli_round_trip(repo, monkeypatch):
+    import alluvia.cli as cli
+    from typer.testing import CliRunner
+    from alluvia.models import Note
+    monkeypatch.setattr(cli, "_repo", lambda: repo)
+    repo.upsert_notes([Note(id="note:w", user_id="local", session_id="claude-code:s",
+                            span_ref="msg:0", kind="idea", text="wrong", created_at=None)])
+    assert CliRunner().invoke(cli.app, ["forget", "note:w", "--reason", "stale"]).exit_code == 0
+    assert "note:w" in CliRunner().invoke(cli.app, ["forget", "--list"]).output
+    assert CliRunner().invoke(cli.app, ["forget", "note:nope"]).exit_code == 1
+    assert CliRunner().invoke(cli.app, ["unforget", "note:w"]).exit_code == 0
+    assert repo.suppressed_note_ids("local") == set()

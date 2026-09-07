@@ -33,6 +33,9 @@ class RawSession:
     ended_at: datetime | None
     messages: list[Message]
     content_hash: str
+    project: str | None = None   # repo root (or cwd) the session ran in; None for
+    #                              sources/records that carry no location
+    branch: str | None = None
 
 
 @dataclass

@@ -31,9 +31,7 @@ def pending_distill(repo, user_id: str) -> list:
     distilled before the marker existed. Both version-aware — a
     PIPELINE_VERSION bump re-distills older material. Shared by refresh and
     `refresh --plan`."""
-    from alluvia.config import PIPELINE_VERSION
-    done = repo.distilled_session_ids(user_id) | \
-        repo.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
+    done = repo.done_session_ids(user_id)
     todo = [s for s in repo.list_sessions(user_id) if s.id not in done]
     return sorted(todo, key=lambda s: (
         s.started_at is None,
@@ -153,8 +151,16 @@ class Engine:
                 run = self._record_run(user_id, s.id, now)
                 for note in notes:
                     note.run_id = run.id
-                self.repo.upsert_notes(notes)
-                self.repo.mark_distilled(user_id, s.id)   # zero notes counts as done
+                partial = bool(getattr(self.distiller, "last_partial", False))
+                if partial:
+                    self.repo.upsert_notes(notes)                 # union: more later
+                else:
+                    self.repo.replace_session_notes(user_id, s.id, notes)
+                if partial:
+                    # provider cut the windows short: keep the notes, leave
+                    # the session pending so the rest is distilled later
+                    log.info("distill: %s partial (provider limit); left pending", s.id)
+                self.repo.mark_distilled(user_id, s.id, partial=partial)  # zero notes = done
                 consecutive = 0
                 d["ok"] += 1
             except LLMUnavailable as e:
@@ -207,6 +213,49 @@ class Engine:
             created_at=now.isoformat())
         self.repo.record_extraction_run(run)
         return run
+
+    def distill_session(self, user_id: str, session_id: str,
+                        force: bool = False, now: datetime | None = None) -> list:
+        """Distill ONE session (hooks call this at session end and before
+        compaction). Idempotent: a session already distilled at the current
+        pipeline version returns its stored notes without an LLM call unless
+        `force` (the live transcript grew since the last pass). Note ids are
+        content-addressed, so re-distilling keeps the union."""
+        from alluvia.config import PIPELINE_VERSION
+        now = now or datetime.now(timezone.utc)
+        session = self.repo.get_session(user_id, session_id)
+        if session is None:
+            return []
+        done = self.repo.distilled_session_ids(user_id, version=PIPELINE_VERSION)
+        if session_id in done and not force:
+            return [n for n in self.repo.get_notes(user_id) if n.session_id == session_id]
+        try:
+            notes = self.distiller.distill(session)
+        except Exception as e:
+            if "json_validate_failed" in str(e):
+                # the provider's JSON mode rejected the generation outright
+                # (hijacked or oversized content): same verdict as the batch
+                # path — a zero-knowledge session, marked so it isn't retried
+                # on every hook event
+                log.info("distill_session: %s yielded no valid JSON; marking zero-note",
+                         session_id)
+                self.repo.mark_distilled(user_id, session_id)
+                return []
+            raise
+        run = self._record_run(user_id, session_id, now)
+        for note in notes:
+            note.run_id = run.id
+        partial = bool(getattr(self.distiller, "last_partial", False))
+        if partial:
+            self.repo.upsert_notes(notes)                         # union: more later
+        else:
+            self.repo.replace_session_notes(user_id, session_id, notes)
+        self.repo.mark_distilled(user_id, session_id, partial=partial)
+        return notes
+
+    def embed_new(self, user_id: str, reporter=None) -> None:
+        """Embed every note that lacks a vector (public seam for hooks)."""
+        self._embed_new(user_id, reporter=reporter)
 
     EMBED_BATCH = 32     # batched so progress moves (and memory stays flat)
 

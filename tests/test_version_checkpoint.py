@@ -13,8 +13,8 @@ def _sess(native):
                       content_hash=content_hash(msgs))
 
 
-def test_pipeline_version_is_2():
-    assert PIPELINE_VERSION == 2
+def test_pipeline_version_is_3():
+    assert PIPELINE_VERSION == 3     # v3: action lines + project identity (re-distill)
 
 
 def test_v1_marked_session_redistills_and_marker_upgrades(repo):

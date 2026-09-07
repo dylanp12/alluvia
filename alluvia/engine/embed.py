@@ -16,6 +16,12 @@ class FastEmbedEmbedder:
         self._model_name = model
         self._model = None
         self.dim = 384
+        # Calibrated 2026-09 on bge-small against a 299-note developer store:
+        # unrelated queries ("my grandmother's lasagna recipe") peak near 0.52,
+        # on-topic notes clear 0.72. Below the floor is junk; between the two
+        # a match needs an exact-term hit to be shown.
+        self.sim_floor = 0.55
+        self.sim_strong = 0.72
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if self._model is None:

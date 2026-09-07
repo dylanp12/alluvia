@@ -305,7 +305,7 @@ def _refresh_plan(repo) -> None:
     typer.echo("(plan only \u2014 no LLM calls were made, nothing was written)")
 
 
-def _echo_refresh_summary(stats: dict) -> None:
+def _echo_refresh_summary(stats: dict, coverage: dict | None = None) -> None:
     """Per-stage outcome of a refresh — a degraded map must never be
     indistinguishable from a healthy one."""
     d, t = stats.get("distill", {}), stats.get("themes", {})
@@ -317,6 +317,15 @@ def _echo_refresh_summary(stats: dict) -> None:
         if d.get("deferred"):
             typer.echo(f"first run: newest sessions first — {d['deferred']} "
                        f"more backfill on the next refresh")
+    if coverage and coverage.get("sessions"):
+        pct = 100 * coverage["distilled"] // coverage["sessions"]
+        typer.echo(f"coverage: {coverage['distilled']}/{coverage['sessions']} sessions "
+                   f"distilled ({pct}%)")
+        if d.get("cold") and coverage.get("pending"):
+            retry = (f" — retry after {stats['retry_at'][:16]} UTC"
+                     if stats.get("retry_at") else "")
+            typer.echo(f"⏸ paused: provider rate-limited, {coverage['pending']} pending"
+                       f"{retry}; `alluvia refresh` resumes where it stopped")
     if t.get("built"):
         typer.echo(f"labels: {t.get('label_cached', 0)} cached · "
                    f"{t.get('label_llm', 0)} fresh · "
@@ -383,7 +392,12 @@ def refresh(
         lock.release()
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
     if isinstance(stats, dict):
-        _echo_refresh_summary(stats)
+        _echo_refresh_summary(stats,
+                              coverage=repo.distill_coverage(config.DEFAULT_USER))
+    from alluvia.hooks import refresh_handoffs
+    n_handoffs = refresh_handoffs(repo, config.DEFAULT_USER)
+    if n_handoffs:
+        typer.echo(f"handoffs: {n_handoffs} repo(s) ready for the next Claude Code session")
 
 
 @app.command()
@@ -425,6 +439,40 @@ def mute(label: str):
 def unmute(label: str):
     _repo().unmute_label(config.DEFAULT_USER, label)
     typer.echo(f"unmuted: {label}")
+
+
+@app.command()
+def forget(
+    note_id: str = typer.Argument(None),
+    reason: str = typer.Option(None, "--reason",
+                               help="Why it is wrong or stale (kept with the record)."),
+    list_: bool = typer.Option(False, "--list", help="Show suppressed notes."),
+):
+    """Suppress a note that is wrong or stale: it never surfaces again in
+    recall, handoffs, or MCP. Raw sessions are untouched; `unforget` reverses."""
+    repo = _repo()
+    if list_:
+        rows = repo.list_suppressed(config.DEFAULT_USER)
+        if not rows:
+            typer.echo("nothing suppressed")
+        for r in rows:
+            typer.echo(f"{r['note_id']}  {r['created_at'][:10]}  {r['reason'] or ''}")
+        return
+    if not note_id:
+        raise typer.BadParameter("give a note id (see `cites:` under a recall hit) or --list")
+    known = {n.id for n in repo.get_notes(config.DEFAULT_USER)}
+    if note_id not in known:
+        typer.echo(f"no note {note_id}")
+        raise typer.Exit(1)
+    repo.suppress_note(config.DEFAULT_USER, note_id, reason=reason)
+    typer.echo(f"forgotten: {note_id} — it will not surface again "
+               f"(alluvia unforget to reverse)")
+
+
+@app.command()
+def unforget(note_id: str):
+    _repo().unsuppress_note(config.DEFAULT_USER, note_id)
+    typer.echo(f"restored: {note_id}")
 
 
 @app.command()
@@ -669,9 +717,12 @@ def init():
 
     typer.echo("\nNext steps:")
     typer.echo("  alluvia refresh && alluvia themes")
-    typer.echo("  MCP:   claude mcp add alluvia -- uv run --directory <repo> alluvia mcp")
+    typer.echo("  Claude Code (hooks + MCP in one install), inside a session:")
+    typer.echo("    /plugin marketplace add dylanp12/alluvia")
+    typer.echo("    /plugin install alluvia@alluvia")
+    typer.echo("  other MCP clients: alluvia mcp   (stdio server)")
     typer.echo("  shell: [ -f ~/.alluvia/digest-pending ] && echo 'alluvia: digest waiting'")
-    typer.echo("  cron:  0 9 * * MON cd <repo> && uv run alluvia digest run --if-due")
+    typer.echo("  cron:  0 9 * * MON alluvia digest run --if-due")
 
 
 def _do_ingest(source: str, path: str) -> None:
@@ -687,6 +738,59 @@ def _do_ingest(source: str, path: str) -> None:
         if repo.upsert_session(s):
             new += 1
     typer.echo(f"  {source}: {total} session(s), {new} new/changed")
+
+
+hook_app = typer.Typer(help="Claude Code hook handlers (wired by the alluvia plugin).")
+app.add_typer(hook_app, name="hook")
+
+
+def _hook_log(msg: str) -> None:
+    import datetime as _dt
+    try:
+        d = config.handoff_dir()
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, "hooks.log"), "a", encoding="utf-8") as f:
+            f.write(f"{_dt.datetime.now(_dt.timezone.utc).isoformat()} {msg}\n")
+    except Exception:
+        pass
+
+
+def _run_hook(event: str) -> None:
+    """Never fail the user's session: any error goes to hooks.log, exit 0."""
+    import json as _json
+    import sys as _sys
+    from alluvia.hooks import parse_payload, run_capture, run_session_start
+    payload = parse_payload(_sys.stdin.read())
+    try:
+        repo = _repo()
+        if event == "session-start":
+            out = run_session_start(payload, repo)
+            if out:
+                typer.echo(_json.dumps(out))
+            return
+        stats = run_capture(payload, repo, build_engine(repo))
+        _hook_log(f"{event}: {stats}")
+    except Exception as e:                      # noqa: BLE001 — by contract
+        _hook_log(f"{event}: error: {e!r} payload_keys={sorted(payload)} "
+                  f"transcript={payload.get('transcript_path')}")
+
+
+@hook_app.command("session-start")
+def hook_session_start():
+    """Inject what alluvia knows about this repo (reads the cached handoff)."""
+    _run_hook("session-start")
+
+
+@hook_app.command("session-end")
+def hook_session_end():
+    """Ingest and distill the finished session; rebuild this repo's handoff."""
+    _run_hook("session-end")
+
+
+@hook_app.command("pre-compact")
+def hook_pre_compact():
+    """Capture the live session before compaction so nothing is lost."""
+    _run_hook("pre-compact")
 
 
 digest_app = typer.Typer(help="Proactive digest: run/show/dismiss/keep")
@@ -972,20 +1076,30 @@ def recall(
                                  help="Emit a paste-ready context block for your current assistant."),
     json_out: bool = typer.Option(False, "--json"),
     limit: int = typer.Option(5, "--limit"),
+    here: bool = typer.Option(False, "--here",
+                              help="Only this repository's sessions (the git root of the cwd)."),
+    include_weak: bool = typer.Option(False, "--include-weak",
+                                      help="Also show matches that have neither a strong "
+                                           "semantic score nor an exact-term hit."),
 ):
     """The front door: what did I already figure out about this?
-    Cited, ranked, retrieval-only — zero LLM spend."""
+    Cited, ranked, retrieval-only — zero LLM spend. Says "no record" when
+    nothing in your history clears the bar."""
     import json as _json
     import os as _os
     from dataclasses import asdict
+    from alluvia.projects import project_root
     from alluvia.recall import build_handoff, recall as _recall, recall_warnings
     repo = _repo()
     git_root = "." if _os.path.isdir(".git") else None
+    scope = project_root(_os.getcwd()) if here else None
     hits = _recall(repo, _recall_embedder(), config.DEFAULT_USER, query,
-                   limit=limit, git_root=git_root)
+                   limit=limit, git_root=git_root, project=scope,
+                   include_weak=include_weak)
     warnings = recall_warnings(repo)
     if json_out:
-        typer.echo(_json.dumps({"query": query, "hits": [asdict(h) for h in hits],
+        typer.echo(_json.dumps({"query": query, "scope": scope,
+                                "hits": [asdict(h) for h in hits],
                                 "warnings": warnings}, indent=2))
         return
     if handoff:
@@ -994,12 +1108,19 @@ def recall(
             typer.echo(f"\u26a0 {w}")
         return
     if not hits:
-        typer.echo("nothing surfaced — refreshed recently? try `alluvia refresh`")
+        n = len(repo.get_notes(config.DEFAULT_USER))
+        where = " in this repo" if scope else ""
+        typer.echo(f"no record of that{where} \u2014 {n} notes searched, none clear the bar")
+        typer.echo("  (add --include-weak to see near misses; `alluvia refresh` if "
+                   "sessions are still pending)")
+        for w in warnings:
+            typer.echo(f"\u26a0 {w}")
         return
     for i, h in enumerate(hits, 1):
         status = f"  [{h.status}]" if h.status else ""
         span = f"  ({h.date_range})" if h.date_range else ""
-        typer.echo(f"{i}. {h.title}{status}{span}")
+        conf = "" if h.confidence == "strong" else f"  ({h.confidence})"
+        typer.echo(f"{i}. {h.title}{status}{span}{conf}")
         typer.echo(f"   {h.summary}")
         typer.echo(f"   why: {h.why}")
         if h.receipts:
@@ -1007,6 +1128,7 @@ def recall(
         if h.git_ref:
             typer.echo(f"   {h.git_ref}")
         typer.echo(f"   sources: {'; '.join(h.sources)}")
+        typer.echo(f"   cites: {', '.join(h.cites[:4])}  \u00b7  wrong? alluvia forget <note-id>")
     for w in warnings:
         typer.echo(f"\u26a0 {w}")
     typer.echo("\ntip: --handoff emits a block to paste into your assistant")
@@ -1042,6 +1164,11 @@ def status(json_out: bool = typer.Option(False, "--json")):
                f"   (rebuildable from raw)")
     typer.echo(f"  judgments  {dc['judgments']['rows']:6} rows  {_size(dc['judgments']['content_bytes'])}"
                f"   (yours — never regenerated)")
+    cov = rep["coverage"]
+    if cov["sessions"]:
+        pct = 100 * cov["distilled"] // cov["sessions"]
+        tail = f" · {cov['pending']} pending → alluvia refresh" if cov["pending"] else ""
+        typer.echo(f"  distilled   {cov['distilled']}/{cov['sessions']} sessions ({pct}%){tail}")
     live = rep["live"]
     typer.echo("live:")
     typer.echo(f"  refresh:   {'running (pid ' + str(live['refresh_lock_pid']) + ')' if live['refresh_lock_pid'] else 'not running'}")

@@ -1,0 +1,11 @@
+{
+  "name": "alluvia",
+  "owner": { "name": "Dylan Parent" },
+  "plugins": [
+    {
+      "name": "alluvia",
+      "source": "./",
+      "description": "Local-first memory for this repo, with receipts. Requires the alluvia CLI (uv tool install alluvia)."
+    }
+  ]
+}

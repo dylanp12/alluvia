@@ -80,3 +80,14 @@ def test_backfills_notes_written_before_the_index_existed(repo):
     repo.conn.commit()
     hits = repo.search_notes_lexical("local", "ECONNREFUSED", k=5)
     assert [h[0] for h in hits] == ["note:b1"]
+
+
+def test_path_query_finds_the_file_not_its_directories(repo):
+    from alluvia.models import Note
+    repo.upsert_notes([
+        Note(id="n1", user_id="local", session_id="claude-code:s", span_ref="msg:0",
+             kind="decision", text="fixed the governor backoff after a 429", created_at=None),
+        Note(id="n2", user_id="local", session_id="claude-code:s", span_ref="msg:0",
+             kind="insight", text="alluvia routes every llm call through one place", created_at=None)])
+    # the note about the FILE matches; sharing two path segments is not a match
+    assert [nid for nid, _ in repo.search_notes_lexical("local", "alluvia/llm/governor.py")] == ["n1"]

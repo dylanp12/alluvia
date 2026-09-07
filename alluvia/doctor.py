@@ -226,6 +226,22 @@ def _live(llm) -> Finding:
                        remedy="check the key, provider status, and rate limits")
 
 
+def _coverage(repo) -> Finding:
+    """Recall can only see distilled sessions; a partly distilled store must
+    never read as healthy."""
+    c = repo.distill_coverage(config.DEFAULT_USER)
+    if not c["sessions"]:
+        return Finding("coverage", "ok", "no sessions ingested yet")
+    if not c["pending"]:
+        return Finding("coverage", "ok", f"all {c['sessions']} sessions distilled")
+    pct = 100 * c["distilled"] // c["sessions"]
+    return Finding("coverage", "warn",
+                   f"{c['distilled']}/{c['sessions']} sessions distilled ({pct}%) — "
+                   f"{c['pending']} pending; recall cannot see them",
+                   remedy="run `alluvia refresh` (free tiers pace slowly; it resumes "
+                          "where it stopped)")
+
+
 def run_doctor(repo, *, check_only: bool = False, live: bool = False,
                llm=None) -> list[Finding]:
     fix = not check_only
@@ -243,6 +259,7 @@ def run_doctor(repo, *, check_only: bool = False, live: bool = False,
         _model_cache(repo),
         _last_refresh(repo),
         _pipeline_drift(repo),
+        _coverage(repo),
     ]
     if live and llm is not None:
         findings.append(_live(llm))

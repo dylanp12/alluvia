@@ -204,6 +204,13 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             created_at TEXT NOT NULL,
             items_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS suppressed_notes (
+            user_id TEXT NOT NULL,
+            note_id TEXT NOT NULL,
+            reason TEXT,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (user_id, note_id)
+        );
         CREATE TABLE IF NOT EXISTS llm_health (
             provider TEXT NOT NULL,
             model TEXT NOT NULL,
@@ -241,6 +248,16 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
         if col not in hcols:
             conn.execute(f"ALTER TABLE llm_health ADD COLUMN {col} "
                          f"INTEGER NOT NULL DEFAULT 0")
+    scols = {r[1] for r in conn.execute("PRAGMA table_info(raw_sessions)")}
+    for col in ("project", "branch"):
+        if col not in scols:
+            conn.execute(f"ALTER TABLE raw_sessions ADD COLUMN {col} TEXT")
+    dcols = {r[1] for r in conn.execute("PRAGMA table_info(distilled_sessions)")}
+    if "partial" not in dcols:
+        # a provider limit cut a multi-window distill short: notes are real
+        # but incomplete, and the session stays pending until a full pass
+        conn.execute("ALTER TABLE distilled_sessions ADD COLUMN partial "
+                     "INTEGER NOT NULL DEFAULT 0")
     # Lexical channel of hybrid recall. tokenchars keeps snake_case
     # identifiers and error codes whole; '/' and '.' still split, so path
     # queries match by segment ("refresh.py" → refresh, py). Standalone

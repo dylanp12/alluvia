@@ -25,6 +25,7 @@ _CLASSES: dict[str, tuple[str, str | None]] = {
     "digests": ("judgments", None),
     "digest_items": ("judgments", "SUM(LENGTH(snapshot))"),
     "muted_themes": ("judgments", None),
+    "suppressed_notes": ("judgments", "SUM(LENGTH(COALESCE(reason,'')))"),
 }
 
 
@@ -104,4 +105,5 @@ def storage_report(repo) -> dict:
     dashboard = 8177 if looks_like_alluvia(8177, timeout=0.3) else None
 
     return {"paths": paths, "data_classes": classes,
+            "coverage": repo.distill_coverage(config.DEFAULT_USER),
             "live": {"refresh_lock_pid": lock_pid, "dashboard_port": dashboard}}

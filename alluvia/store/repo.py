@@ -18,8 +18,7 @@ def _dts(d: datetime | None) -> str | None:
     return d.isoformat() if d else None
 
 
-from alluvia.lexical import lex_tokens as _lex_tokens
-from alluvia.lexical import required_count as _lex_required
+from alluvia.lexical import lex_query as _lex_query
 
 
 class Repo:
@@ -35,48 +34,91 @@ class Repo:
         return self._vec_index
 
     # ---- sessions ----
+    _SESSION_COLS = ("id,user_id,source,native_id,title,started_at,ended_at,"
+                     "messages_json,content_hash,project,branch")
+
     def upsert_session(self, s: RawSession) -> bool:
         row = self.conn.execute(
-            "SELECT content_hash FROM raw_sessions WHERE user_id=? AND id=?",
-            (s.user_id, s.id),
-        ).fetchone()
-        if row and row[0] == s.content_hash:
+            "SELECT content_hash, project, branch FROM raw_sessions "
+            "WHERE user_id=? AND id=?", (s.user_id, s.id)).fetchone()
+        if row and row[0] == s.content_hash and (row[1], row[2]) == (s.project, s.branch):
             return False
+        if row and row[0] != s.content_hash:
+            # derived is rebuildable from raw: notes distilled from the OLD
+            # content are invalid the moment the raw changes — drop them (and
+            # their vectors and marker) so the next pass distills fresh and
+            # "no record" beats a stale one
+            self._drop_session_derived(s.user_id, s.id)
         messages_json = json.dumps(
             [[m.role, m.text, _dts(m.ts)] for m in s.messages], ensure_ascii=False
         )
         self.conn.execute(
             """INSERT INTO raw_sessions
-               (id,user_id,source,native_id,title,started_at,ended_at,messages_json,content_hash)
-               VALUES (?,?,?,?,?,?,?,?,?)
+               (id,user_id,source,native_id,title,started_at,ended_at,messages_json,
+                content_hash,project,branch)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id,id) DO UPDATE SET
                  source=excluded.source, native_id=excluded.native_id, title=excluded.title,
                  started_at=excluded.started_at, ended_at=excluded.ended_at,
-                 messages_json=excluded.messages_json, content_hash=excluded.content_hash""",
+                 messages_json=excluded.messages_json, content_hash=excluded.content_hash,
+                 project=excluded.project, branch=excluded.branch""",
             (s.id, s.user_id, s.source, s.native_id, s.title, _dts(s.started_at),
-             _dts(s.ended_at), messages_json, s.content_hash),
+             _dts(s.ended_at), messages_json, s.content_hash, s.project, s.branch),
         )
         self.conn.commit()
         return True
+
+    def _drop_session_derived(self, user_id: str, session_id: str) -> None:
+        ids = [r[0] for r in self.conn.execute(
+            "SELECT id FROM notes WHERE user_id=? AND session_id=?", (user_id, session_id))]
+        for nid in ids:
+            self.conn.execute("DELETE FROM notes_fts WHERE user_id=? AND note_id=?",
+                              (user_id, nid))
+            self.conn.execute("DELETE FROM note_embeddings WHERE user_id=? AND note_id=?",
+                              (user_id, nid))
+            self._index().delete(user_id, nid)
+        self.conn.execute("DELETE FROM notes WHERE user_id=? AND session_id=?",
+                          (user_id, session_id))
+        self.conn.execute("DELETE FROM distilled_sessions WHERE user_id=? AND session_id=?",
+                          (user_id, session_id))
 
     def _row_to_session(self, r) -> RawSession:
         msgs = [Message(role=a, text=b, ts=_dt(c)) for a, b, c in json.loads(r[7])]
         return RawSession(
             id=r[0], user_id=r[1], source=r[2], native_id=r[3], title=r[4],
             started_at=_dt(r[5]), ended_at=_dt(r[6]), messages=msgs, content_hash=r[8],
+            project=r[9], branch=r[10],
         )
 
     def get_session(self, user_id: str, sid: str) -> RawSession | None:
         r = self.conn.execute(
-            "SELECT * FROM raw_sessions WHERE user_id=? AND id=?", (user_id, sid)
-        ).fetchone()
+            f"SELECT {self._SESSION_COLS} FROM raw_sessions WHERE user_id=? AND id=?",
+            (user_id, sid)).fetchone()
         return self._row_to_session(r) if r else None
 
     def list_sessions(self, user_id: str) -> list[RawSession]:
         rows = self.conn.execute(
-            "SELECT * FROM raw_sessions WHERE user_id=? ORDER BY id", (user_id,)
-        ).fetchall()
+            f"SELECT {self._SESSION_COLS} FROM raw_sessions WHERE user_id=? ORDER BY id",
+            (user_id,)).fetchall()
         return [self._row_to_session(r) for r in rows]
+
+    def list_session_meta(self, user_id: str, project: str | None = None) -> list[dict]:
+        """Session headers without message bodies — cheap enough to call from a
+        hook. Optionally filtered to one project root."""
+        sql = ("SELECT id,source,native_id,title,started_at,ended_at,project,branch "
+               "FROM raw_sessions WHERE user_id=?")
+        params: tuple = (user_id,)
+        if project is not None:
+            sql += " AND project=?"
+            params = (user_id, project)
+        rows = self.conn.execute(sql + " ORDER BY started_at, id", params).fetchall()
+        return [{"id": r[0], "source": r[1], "native_id": r[2], "title": r[3],
+                 "started_at": _dt(r[4]), "ended_at": _dt(r[5]),
+                 "project": r[6], "branch": r[7]} for r in rows]
+
+    def session_projects(self, user_id: str) -> dict[str, str | None]:
+        return {r[0]: r[1] for r in self.conn.execute(
+            "SELECT id, project FROM raw_sessions WHERE user_id=?", (user_id,))}
 
     # ---- notes ----
     def upsert_notes(self, notes: list[Note]) -> None:
@@ -103,6 +145,28 @@ class Repo:
                 (n.id, n.user_id, n.text))
         self.conn.commit()
 
+    def replace_session_notes(self, user_id: str, session_id: str,
+                              notes: list[Note]) -> int:
+        """A FULL distill of a session defines its note set: notes from an
+        earlier pass that the new pass did not produce are stale (the raw
+        rendering or the pipeline changed) and are removed with their vectors
+        and FTS rows. Returns how many were dropped. Partial passes must use
+        upsert_notes (union) instead."""
+        self.upsert_notes(notes)
+        keep = {n.id for n in notes}
+        stale = [r[0] for r in self.conn.execute(
+            "SELECT id FROM notes WHERE user_id=? AND session_id=?", (user_id, session_id))
+            if r[0] not in keep]
+        for nid in stale:
+            self.conn.execute("DELETE FROM notes WHERE user_id=? AND id=?", (user_id, nid))
+            self.conn.execute("DELETE FROM notes_fts WHERE user_id=? AND note_id=?",
+                              (user_id, nid))
+            self.conn.execute("DELETE FROM note_embeddings WHERE user_id=? AND note_id=?",
+                              (user_id, nid))
+            self._index().delete(user_id, nid)
+        self.conn.commit()
+        return len(stale)
+
     def get_notes(self, user_id: str) -> list[Note]:
         rows = self.conn.execute(
             "SELECT id,user_id,session_id,span_ref,kind,text,created_at,canonical_id,"
@@ -123,19 +187,44 @@ class Repo:
             "WHERE user_id=? AND pipeline_version >= ?", (user_id, version))}
 
     # ---- distill checkpoint (covers zero-note sessions, unlike notes-derived) ----
-    def mark_distilled(self, user_id: str, session_id: str) -> None:
+    def mark_distilled(self, user_id: str, session_id: str,
+                       partial: bool = False) -> None:
+        """`partial`: the provider cut a multi-window distill short — the
+        notes written are real but incomplete, so the session is NOT done."""
         self.conn.execute(
-            "INSERT INTO distilled_sessions(user_id,session_id,pipeline_version) "
-            "VALUES (?,?,?) ON CONFLICT(user_id,session_id) DO UPDATE SET "
-            "pipeline_version=excluded.pipeline_version",
-            (user_id, session_id, PIPELINE_VERSION))
+            "INSERT INTO distilled_sessions(user_id,session_id,pipeline_version,partial) "
+            "VALUES (?,?,?,?) ON CONFLICT(user_id,session_id) DO UPDATE SET "
+            "pipeline_version=excluded.pipeline_version, partial=excluded.partial",
+            (user_id, session_id, PIPELINE_VERSION, 1 if partial else 0))
         self.conn.commit()
 
     def distilled_session_ids(self, user_id: str,
                               version: int = PIPELINE_VERSION) -> set[str]:
         return {r[0] for r in self.conn.execute(
             "SELECT session_id FROM distilled_sessions "
-            "WHERE user_id=? AND pipeline_version >= ?", (user_id, version))}
+            "WHERE user_id=? AND pipeline_version >= ? AND partial=0", (user_id, version))}
+
+    def partial_session_ids(self, user_id: str) -> set[str]:
+        return {r[0] for r in self.conn.execute(
+            "SELECT session_id FROM distilled_sessions WHERE user_id=? AND partial=1",
+            (user_id,))}
+
+    def done_session_ids(self, user_id: str) -> set[str]:
+        """Sessions recall can consider fully distilled at the current pipeline
+        version. Union: the marker table is authoritative; the notes-derived
+        set backfills sessions distilled before the marker existed — minus
+        sessions explicitly known to be partial."""
+        return (self.distilled_session_ids(user_id)
+                | (self.session_ids_with_notes(user_id, version=PIPELINE_VERSION)
+                   - self.partial_session_ids(user_id)))
+
+    def distill_coverage(self, user_id: str) -> dict:
+        """How much of the raw history recall can actually see."""
+        total = self.conn.execute(
+            "SELECT COUNT(*) FROM raw_sessions WHERE user_id=?", (user_id,)).fetchone()[0]
+        done = len(self.done_session_ids(user_id))
+        return {"sessions": total, "distilled": min(done, total),
+                "pending": max(total - done, 0)}
 
     # ---- extraction runs (provenance: which model/prompt produced what) ----
     def record_extraction_run(self, run: ExtractionRun) -> None:
@@ -305,21 +394,18 @@ class Repo:
         syntax), OR-matched, then thresholded: a note must contain every
         token of a 1–2-token query, or at least half of a longer one —
         one shared word is not an answer."""
-        toks = _lex_tokens(query)
-        if not toks:
+        q = _lex_query(query)
+        if not q.tokens:
             return []
         self._sync_fts(user_id)
-        match = " OR ".join(f'"{t}"' for t in toks)
+        match = " OR ".join(f'"{t}"' for t in q.tokens)
         rows = self.conn.execute(
             "SELECT note_id, text, bm25(notes_fts) AS r FROM notes_fts "
             "WHERE notes_fts MATCH ? AND user_id=? ORDER BY r LIMIT ?",
             (match, user_id, k * 3)).fetchall()
-        required = _lex_required(toks)
-        out = []
-        for nid, text, r in rows:
-            low = text.lower()
-            if sum(1 for t in toks if t in low) >= required:
-                out.append((nid, -float(r)))     # bm25: smaller is better
+        # bm25: smaller is better; a path query must name THE file, a plain
+        # query must share enough terms — one shared word is not an answer
+        out = [(nid, -float(r)) for nid, text, r in rows if q.matches(text)]
         return out[:k]
 
     def note_excerpt(self, user_id: str, note: Note) -> str | None:
@@ -504,6 +590,30 @@ class Repo:
     def muted_labels(self, user_id: str) -> set[str]:
         return {r[0] for r in self.conn.execute(
             "SELECT label_lc FROM muted_themes WHERE user_id=?", (user_id,))}
+
+    # ---- suppression (JUDGMENTS: a note the user says is wrong or stale never
+    # surfaces again — in recall, handoffs, or MCP. Raw and derived untouched.) ----
+    def suppress_note(self, user_id: str, note_id: str, reason: str | None = None) -> None:
+        from datetime import datetime, timezone
+        self.conn.execute(
+            "INSERT INTO suppressed_notes(user_id,note_id,reason,created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(user_id,note_id) DO UPDATE SET reason=excluded.reason",
+            (user_id, note_id, reason, datetime.now(timezone.utc).isoformat()))
+        self.conn.commit()
+
+    def unsuppress_note(self, user_id: str, note_id: str) -> None:
+        self.conn.execute("DELETE FROM suppressed_notes WHERE user_id=? AND note_id=?",
+                          (user_id, note_id))
+        self.conn.commit()
+
+    def suppressed_note_ids(self, user_id: str) -> set[str]:
+        return {r[0] for r in self.conn.execute(
+            "SELECT note_id FROM suppressed_notes WHERE user_id=?", (user_id,))}
+
+    def list_suppressed(self, user_id: str) -> list[dict]:
+        return [{"note_id": r[0], "reason": r[1], "created_at": r[2]} for r in self.conn.execute(
+            "SELECT note_id, reason, created_at FROM suppressed_notes WHERE user_id=? "
+            "ORDER BY created_at", (user_id,))]
 
     # ---- digests (JUDGMENTS-class: durable, snapshot text) ----
     def insert_digest(self, user_id: str, created_at: str, items: list[dict]) -> int:

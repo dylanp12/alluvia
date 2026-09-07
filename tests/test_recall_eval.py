@@ -72,6 +72,7 @@ GOLDEN = [
     Golden("worker crash since march", None, "temporal"),   # window is empty → refuse
     Golden("kubernetes ingress cert rotation", None, "unanswerable"),
     Golden("stripe webhook signature mismatch", None, "unanswerable"),
+    Golden("recipe for sourdough starter", None, "unanswerable"),
 ]
 
 
@@ -93,6 +94,13 @@ def _seed(repo):
     repo.upsert_notes(notes)
     for n in notes:
         repo.set_embedding("local", n.id, emb.embed([n.text])[0])
+    # a real-weight bridge (1.6–1.8 on real stores) between two off-topic notes:
+    # it must never buy its way into an unrelated answer
+    from alluvia.models import Link
+    repo.replace_links("local", [
+        Link(id="l1", user_id="local", from_note_id="note:db1", to_note_id="note:dep1",
+             from_theme_id=None, to_theme_id=None, kind="cross_source_surprise",
+             weight=1.79, why="both cold-start failures")])
 
 
 def run_eval(repo, embedder, golden: list[Golden]) -> dict:

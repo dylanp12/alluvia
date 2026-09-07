@@ -65,3 +65,74 @@ def test_skips_non_message_events_and_malformed(tmp_path):
     assert len(sessions) == 1
     assert sessions[0].native_id == "z"
     assert [m.text for m in sessions[0].messages] == ["hello world"]
+
+
+import json
+
+
+def _rec(type_, content, **extra):
+    d = {"type": type_, "message": {"role": type_, "content": content}}
+    d.update(extra)
+    return json.dumps(d)
+
+
+def test_session_carries_project_and_branch(tmp_path):
+    repo = tmp_path / "acme"; (repo / ".git").mkdir(parents=True)
+    (tmp_path / "s.jsonl").write_text(
+        _rec("user", "hello", cwd=str(repo / "src"), gitBranch="feat/x") + "\n"
+        + _rec("assistant", [{"type": "text", "text": "hi"}], cwd=str(repo / "src")) + "\n")
+    s = list(ClaudeCodeAdapter(str(tmp_path)).read())[0]
+    assert s.project == str(repo)          # git root, not the deeper cwd
+    assert s.branch == "feat/x"
+
+
+def test_tool_actions_are_kept_as_action_lines(tmp_path):
+    cwd = "/work/acme"
+    (tmp_path / "s.jsonl").write_text(
+        _rec("user", "fix the race", cwd=cwd) + "\n"
+        + _rec("assistant", [
+            {"type": "text", "text": "Pinning clock skew."},
+            {"type": "tool_use", "name": "Edit", "input": {"file_path": "/work/acme/auth/refresh.py", "old_string": "a", "new_string": "b"}},
+            {"type": "tool_use", "name": "Bash", "input": {"command": "pytest -q tests/test_auth.py\n"}},
+            {"type": "tool_use", "name": "Grep", "input": {"pattern": "clock_skew"}},
+        ], cwd=cwd) + "\n"
+        + _rec("user", [{"type": "tool_result", "tool_use_id": "x", "content": "3 passed"}], cwd=cwd) + "\n")
+    s = list(ClaudeCodeAdapter(str(tmp_path)).read())[0]
+    assert [m.role for m in s.messages] == ["user", "assistant"]   # tool_result-only turn dropped
+    text = s.messages[1].text
+    assert text.startswith("Pinning clock skew.")
+    assert "[action] Edit auth/refresh.py" in text                  # relative to cwd
+    assert "[action] Bash: pytest -q tests/test_auth.py" in text    # newline collapsed
+    assert "[action] Grep clock_skew" in text
+    assert "old_string" not in text                                  # arguments never dumped
+
+
+def test_action_only_turn_is_kept_and_capped(tmp_path):
+    blocks = [{"type": "tool_use", "name": "Read", "input": {"file_path": f"/w/f{i}.py"}} for i in range(30)]
+    (tmp_path / "s.jsonl").write_text(
+        _rec("user", "look around", cwd="/w") + "\n" + _rec("assistant", blocks, cwd="/w") + "\n")
+    s = list(ClaudeCodeAdapter(str(tmp_path)).read())[0]
+    lines = s.messages[1].text.splitlines()
+    assert lines[0] == "[action] Read f0.py"
+    assert len(lines) == 21 and lines[-1] == "[action] …10 more"
+
+
+def test_read_file_returns_one_session(tmp_path):
+    p = tmp_path / "one.jsonl"
+    p.write_text(_rec("user", "hello") + "\n")
+    s = ClaudeCodeAdapter(str(tmp_path)).read_file(str(p))
+    assert s is not None and s.native_id == "one"
+
+
+def test_harness_injected_user_slot_records_are_not_the_users_thread(tmp_path):
+    """Claude Code marks injected user-slot content (skill bodies, command
+    expansions) with isMeta. Measured 2026-09-05: a real session's handoff
+    surfaced the TDD skill's rules as the user's 'decisions'. Not the user's
+    thinking — never ingested."""
+    (tmp_path / "s.jsonl").write_text(
+        _rec("user", "make recall honest", cwd="/w") + "\n"
+        + _rec("user", "Base directory for this skill: /plugins/tdd\n# TDD\nAlways write the test first.",
+               cwd="/w", isMeta=True) + "\n"
+        + _rec("assistant", [{"type": "text", "text": "On it."}], cwd="/w") + "\n")
+    s = list(ClaudeCodeAdapter(str(tmp_path)).read())[0]
+    assert [m.text for m in s.messages] == ["make recall honest", "On it."]

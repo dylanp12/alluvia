@@ -27,6 +27,56 @@ def _ts(v) -> datetime | None:
         return None
 
 
+MAX_ACTIONS_PER_MESSAGE = 20
+_ACTION_ARG_CAP = 120
+
+
+def _rel(path: str, cwd: str | None) -> str:
+    if cwd and isinstance(path, str):
+        base = cwd.rstrip("/\\") + "/"
+        if path.startswith(base):
+            return path[len(base):]
+    return path
+
+
+def _one_line(s, cap: int = _ACTION_ARG_CAP) -> str:
+    s = " ".join(str(s).split())
+    return s if len(s) <= cap else s[:cap] + "…"
+
+
+def _action(block: dict, cwd: str | None) -> str:
+    """One line per tool call: what was touched or run, never the payload."""
+    name = block.get("name") or "tool"
+    inp = block.get("input") if isinstance(block.get("input"), dict) else {}
+    if "file_path" in inp:
+        return f"{name} {_rel(inp['file_path'], cwd)}"
+    if name == "Bash" and "command" in inp:
+        return f"Bash: {_one_line(inp['command'])}"
+    for key in ("pattern", "url", "query", "description", "prompt", "skill"):
+        if key in inp:
+            return f"{name} {_one_line(inp[key], 80)}"
+    return name
+
+
+def _actions(content, cwd: str | None) -> list[str]:
+    if not isinstance(content, list):
+        return []
+    acts = [_action(b, cwd) for b in content
+            if isinstance(b, dict) and b.get("type") == "tool_use"]
+    if len(acts) > MAX_ACTIONS_PER_MESSAGE:
+        acts = acts[:MAX_ACTIONS_PER_MESSAGE] + [f"…{len(acts) - MAX_ACTIONS_PER_MESSAGE} more"]
+    return acts
+
+
+def _message_text(msg: dict, cwd: str | None) -> str:
+    """Conversation text plus `[action]` lines for tool calls. Tool RESULTS are
+    dropped (bulky, noisy); what the assistant did is kept, what it saw is not."""
+    text = _text(msg.get("content")).strip()
+    acts = _actions(msg.get("content"), cwd) if msg.get("role") == "assistant" else []
+    lines = ([text] if text else []) + [f"[action] {a}" for a in acts]
+    return "\n".join(lines)
+
+
 # Harness-generated evaluation transcripts (stop-hook continuation judges,
 # workflow critics) are stored as ordinary session files but are NOT the
 # user's thinking. No metadata distinguishes them (probed 2026-07-02: fields
@@ -65,9 +115,16 @@ class ClaudeCodeAdapter:
             if session is not None:
                 yield session
 
+    def read_file(self, path: str) -> RawSession | None:
+        """One transcript file → one session (hooks ingest the live transcript)."""
+        return self._read_file(path)
+
     def _read_file(self, path: str) -> RawSession | None:
+        from alluvia.projects import project_root
         native_id = os.path.splitext(os.path.basename(path))[0]
         messages: list[Message] = []
+        cwd: str | None = None
+        branch: str | None = None
         with open(path, encoding="utf-8", errors="replace") as f:
             for line in f:
                 line = line.strip()
@@ -79,14 +136,21 @@ class ClaudeCodeAdapter:
                     continue  # partial/non-JSON lines occur in real logs
                 if not isinstance(obj, dict):
                     continue
+                if cwd is None and isinstance(obj.get("cwd"), str) and obj["cwd"]:
+                    cwd = obj["cwd"]
+                if branch is None and isinstance(obj.get("gitBranch"), str) and obj["gitBranch"]:
+                    branch = obj["gitBranch"]
                 if obj.get("isSidechain"):
                     continue  # subagent/sidechain scratch work — not the user's thread
+                if obj.get("isMeta"):
+                    continue  # harness-injected user-slot content (skill bodies,
+                    #           command expansions) — not the user's thinking
                 if obj.get("type") not in ("user", "assistant"):
                     continue  # skip attachments, snapshots, progress, etc.
                 msg = obj.get("message")
                 if not isinstance(msg, dict):
                     continue
-                text = _text(msg.get("content")).strip()
+                text = _message_text(msg, cwd)
                 if not text:
                     continue
                 role = msg.get("role") or obj.get("type") or "user"
@@ -102,4 +166,5 @@ class ClaudeCodeAdapter:
                         if strip_wrappers(m.text)), native_id),
             started_at=messages[0].ts, ended_at=messages[-1].ts, messages=messages,
             content_hash=content_hash(messages),
+            project=project_root(cwd), branch=branch,
         )

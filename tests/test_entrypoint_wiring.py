@@ -39,3 +39,14 @@ def test_mcp_deps_use_sqlite_health(tmp_path, monkeypatch):
     from alluvia.mcp_server import SiftDeps
     deps = SiftDeps()
     assert isinstance(deps.gen_llm.store, LLMHealthStore)
+
+
+def test_mcp_dependency_excludes_the_2x_rename():
+    """Dogfooding 2026-09-06: a fresh `uv tool install alluvia` resolved mcp 2.x,
+    where FastMCP was renamed, and `alluvia mcp` crashed on import — every new
+    install showed "1 MCP server failed". The lockfile hid it from the suite.
+    Pin below 2 until the server is migrated."""
+    import re, tomllib, pathlib
+    py = tomllib.loads(pathlib.Path(__file__).resolve().parents[1].joinpath("pyproject.toml").read_text())
+    spec = next(d for d in py["project"]["dependencies"] if re.match(r"^mcp\b", d))
+    assert "<2" in spec.replace(" ", ""), spec

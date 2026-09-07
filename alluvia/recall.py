@@ -21,7 +21,10 @@ from alluvia.models import to_utc
 from alluvia.temporal import TimeScope, parse_time_scope
 
 SEARCH_K = 25
-SIM_FLOOR = 0.15          # dense entrants below this cosine are junk
+SIM_FLOOR = 0.15          # default admission floor (scripted embedders); real
+SIM_STRONG = 0.60         # embedders override both via .sim_floor / .sim_strong
+THEME_BONUS = 0.02        # a theme with several matching notes edges a lone note
+BRIDGE_TIEBREAK = 0.01    # link weight ONLY tie-breaks among bridges
 LEX_SIM_CEIL = 0.95       # a top lexical match enters just below a perfect cosine
 LEX_SIM_STEP = 0.04       # ...decaying by BM25 rank
 LEX_BONUS = 0.05          # matching BOTH channels breaks ties toward the exact hit
@@ -44,6 +47,7 @@ class RecallHit:
     cites: list[str] = field(default_factory=list)
     receipts: list[dict] = field(default_factory=list)   # {note, quote, source}
     git_ref: str | None = None
+    confidence: str = "strong"      # strong | corroborated | weak (see recall())
 
 
 def _note_source(n) -> str:
@@ -60,15 +64,34 @@ def _span(t) -> str | None:
 
 def recall(repo, embedder, user_id: str, query: str, limit: int = 5,
            git_root: str | None = None,
-           now: datetime | None = None) -> list[RecallHit]:
+           now: datetime | None = None,
+           project: str | None = None,
+           include_weak: bool = False) -> list[RecallHit]:
+    """Rank by the question, never by how heavy a stored bridge is.
+
+    Admission: a note enters on dense similarity above the embedder's
+    calibrated floor, or on an exact-term (lexical) hit. Confidence:
+    `strong` = dense at/above the embedder's strong mark or an exact-term
+    hit; `corroborated` = exact-term hit with a middling dense score;
+    `weak` = dense between floor and strong with no exact term — hidden
+    unless `include_weak`, because on real embedders that band is where the
+    junk lives. `project` restricts to sessions from one repository;
+    suppressed notes never take part."""
     notes = {n.id: n for n in repo.get_notes(user_id)}
+    hidden = getattr(repo, "suppressed_note_ids", lambda u: set())(user_id)
+    if project is not None:
+        owner = repo.session_projects(user_id)
+        notes = {nid: n for nid, n in notes.items() if owner.get(n.session_id) == project}
+    notes = {nid: n for nid, n in notes.items() if nid not in hidden}
     if not notes:
         return []
+    floor = getattr(embedder, "sim_floor", SIM_FLOOR)
+    strong = getattr(embedder, "sim_strong", SIM_STRONG)
     scope = parse_time_scope(query, now=now)
     q = scope.cleaned if scope and scope.cleaned.strip() else query
     dense = [(nid, s) for nid, s in
              repo.search_notes(user_id, embedder.embed([q])[0], k=SEARCH_K)
-             if nid in notes and s > SIM_FLOOR]
+             if nid in notes and s > floor]
     lex_search = getattr(repo, "search_notes_lexical", None)
     lex = [(nid, s) for nid, s in
            (lex_search(user_id, q, k=SEARCH_K) if lex_search else [])
@@ -78,50 +101,69 @@ def recall(repo, embedder, user_id: str, query: str, limit: int = 5,
         # outside the window are wrong answers, and empty is honest
         dense = [(nid, s) for nid, s in dense if _in_scope(notes[nid], scope)]
         lex = [(nid, s) for nid, s in lex if _in_scope(notes[nid], scope)]
-    hot = _fuse(dense, lex)
+    hot, lex_ids = _fuse(dense, lex)
+    dense_by = dict(dense)
+    conf = {}
+    for nid in hot:
+        d = dense_by.get(nid, 0.0)
+        if nid in lex_ids:
+            conf[nid] = "strong" if d >= strong else "corroborated"
+        else:
+            conf[nid] = "strong" if d >= strong else "weak"
+    if not include_weak:
+        hot = {nid: s for nid, s in hot.items() if conf[nid] != "weak"}
     if not hot:
         return []
     _boost_fresh(hot, notes, now)
 
-    hits: list[RecallHit] = []
+    def _conf(ids) -> str:
+        levels = [conf[i] for i in ids if i in conf]
+        if "strong" in levels:
+            return "strong"
+        return "corroborated" if "corroborated" in levels else "weak"
 
-    themes = repo.list_themes(user_id)
+    hits: list[RecallHit] = []
     theme_hits = []
-    for t in themes:
+    for t in repo.list_themes(user_id):
         matched = [nid for nid in t.note_ids if nid in hot]
         if not matched:
             continue
-        strength = sum(hot[nid] for nid in matched)
         example = notes[matched[0]].text
         why = (f"{len(matched)} of your prior notes match — e.g. “{example}”"
                + (f"; thread status: {t.status}" if t.status else ""))
         theme_hits.append(RecallHit(
-            kind="theme", title=t.label, summary=t.summary or example,
-            why=why, score=strength, status=t.status, date_range=_span(t),
+            kind="theme", title=t.label, summary=t.summary or example, why=why,
+            score=max(hot[n] for n in matched) + THEME_BONUS * min(len(matched) - 1, 3),
+            status=t.status, date_range=_span(t),
             sources=sorted({_note_source(notes[nid]) for nid in matched}),
-            cites=matched))
+            cites=matched, confidence=_conf(matched)))
     theme_hits.sort(key=lambda h: -h.score)
     hits.extend(theme_hits[: max(1, limit - 1)])
 
     for l in repo.list_links(user_id, limit=200):
-        if l.from_note_id in hot or l.to_note_id in hot:
-            a, b = notes.get(l.from_note_id), notes.get(l.to_note_id)
-            if not a or not b:
-                continue
-            gap = ""
-            if a.created_at and b.created_at:
-                days = abs((to_utc(a.created_at) - to_utc(b.created_at)).days)
-                gap = f" · {days // 30} months apart" if days >= 60 else ""
-            tools = {a.session_id.split(':', 1)[0], b.session_id.split(':', 1)[0]}
-            why = l.why or (f"bridge across {' ↔ '.join(sorted(tools))}{gap}")
-            hits.append(RecallHit(
-                kind="connection",
-                title=f"{a.text[:60]} ↔ {b.text[:60]}",
-                summary=b.text, why=why,
-                score=l.weight + max(hot.get(l.from_note_id, 0),
-                                     hot.get(l.to_note_id, 0)),
-                sources=[_note_source(a), _note_source(b)],
-                cites=[l.from_note_id, l.to_note_id]))
+        ends = [x for x in (l.from_note_id, l.to_note_id) if x in hot]
+        if not ends:
+            continue
+        a, b = notes.get(l.from_note_id), notes.get(l.to_note_id)
+        if not a or not b:
+            continue
+        gap = ""
+        if a.created_at and b.created_at:
+            days = abs((to_utc(a.created_at) - to_utc(b.created_at)).days)
+            gap = f" · {days // 30} months apart" if days >= 60 else ""
+        tools = {a.session_id.split(':', 1)[0], b.session_id.split(':', 1)[0]}
+        why = l.why or (f"bridge across {' ↔ '.join(sorted(tools))}{gap}")
+        hits.append(RecallHit(
+            kind="connection",
+            title=f"{a.text[:60]} ↔ {b.text[:60]}",
+            summary=b.text, why=why,
+            # relevance decides; the stored weight only orders bridges among
+            # themselves (on real stores weights run 1.6–1.8 and used to win
+            # every query outright)
+            score=0.9 * max(hot[x] for x in ends)
+                  + BRIDGE_TIEBREAK * min(l.weight, 3.0) / 3.0,
+            sources=[_note_source(a), _note_source(b)],
+            cites=[l.from_note_id, l.to_note_id], confidence=_conf(ends)))
 
     cited = {c for h in hits for c in h.cites}
     for nid, s in sorted(hot.items(), key=lambda kv: -kv[1]):
@@ -130,7 +172,7 @@ def recall(repo, embedder, user_id: str, query: str, limit: int = 5,
             hits.append(RecallHit(
                 kind="note", title=n.text[:70], summary=n.text,
                 why=f"direct match ({n.kind})", score=s * 0.8,
-                sources=[_note_source(n)], cites=[nid]))
+                sources=[_note_source(n)], cites=[nid], confidence=conf[nid]))
 
     hits.sort(key=lambda h: -h.score)
     out, seen_kinds = [], set()
@@ -193,20 +235,23 @@ def _boost_fresh(hot: dict[str, float], notes, now: datetime | None) -> None:
 
 
 def _fuse(dense: list[tuple[str, float]],
-          lex: list[tuple[str, float]]) -> dict[str, float]:
+          lex: list[tuple[str, float]]) -> tuple[dict[str, float], set[str]]:
     """Hybrid admission on the cosine scale the surfaces were tuned for:
     dense entrants keep their similarity untouched; a lexical match admits
     a note the embedder missed at just-below-top strength; matching in BOTH
     channels adds a small rank-aware boost so the exact hit breaks ties.
-    With no lexical hits this is exactly the old dense-only behavior."""
+    With no lexical hits this is exactly the old dense-only behavior.
+    Also returns which notes the lexical channel vouched for."""
     hot = dict(dense)
+    lex_ids: set[str] = set()
     for rank, (nid, _bm25) in enumerate(lex):
+        lex_ids.add(nid)
         mapped = max(LEX_SIM_CEIL - LEX_SIM_STEP * rank, SIM_FLOOR + 0.01)
         if nid in hot:
             hot[nid] = min(1.2, max(hot[nid], mapped) + LEX_BONUS / (rank + 1))
         else:
             hot[nid] = mapped
-    return hot
+    return hot, lex_ids
 
 
 _word = re.compile(r"[a-z]{3,}")

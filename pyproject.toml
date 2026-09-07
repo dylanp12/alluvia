@@ -1,6 +1,6 @@
 [project]
 name = "alluvia"
-version = "0.6.1"
+version = "0.7.0"
 description = "Ask your whole AI history — every tool, every month — and get cited answers. Local-first."
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -22,7 +22,7 @@ dependencies = [
   "hdbscan>=0.8.40",
   "numpy>=2.0",
   "sqlite-vec>=0.1.6",
-  "mcp>=1.2",
+  "mcp>=1.2,<2",   # 2.x renamed FastMCP; see tests/test_entrypoint_wiring.py
   "psutil>=5.9",
 ]
 

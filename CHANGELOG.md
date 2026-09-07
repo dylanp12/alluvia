@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+## 0.7.0 — 2026-09-06
+
+Your agent remembers this repo, and it will not lie about it.
+
+- **Claude Code plugin** — one install wires session hooks and the MCP tools.
+  Every session start, resume, and post-compaction injects what alluvia knows
+  about the repository you are in: last session's decisions and problems, open
+  loops, earlier decisions, each with its session receipt. Nothing known,
+  nothing injected. Transcripts are captured at session end and before
+  compaction; no daemon, no per-tool-call model.
+- **Sessions know their repository.** The Claude Code adapter keeps the
+  working directory and branch, and records tool actions (files edited,
+  commands run) as `[action]` lines, so notes can name files. Re-distill
+  required (pipeline v3).
+- **Recall ranks by the question.** Bridge weight no longer buys a slot; the
+  similarity floor is calibrated to the shipped embedder; hits carry a
+  confidence (strong, corroborated, weak) and weak ones are hidden by default;
+  `--here` scopes to the current repository; an empty result says "no record".
+- **`alluvia forget <note-id>`** suppresses a wrong or stale note everywhere,
+  permanently, without touching raw sessions.
+- **Long sessions distill in bounded windows** that always include the end of
+  the session, where decisions land. A provider limit part-way keeps the notes
+  that came back and leaves the session pending instead of discarding them.
+  Harness-injected content (skill bodies, command expansions) is never treated
+  as your thinking, and re-ingesting a session with a better adapter replaces
+  its stale notes instead of piling on.
+- **`alluvia mcp` starts on fresh installs again.** The dependency spec allowed
+  mcp 2.x, which renamed the server API, so a new `uv tool install alluvia`
+  showed "1 MCP server failed" in Claude Code. Pinned below 2 and guarded by a
+  test; found by installing the release like a stranger.
+- **Coverage is visible.** `refresh`, `status`, and `doctor` state how many
+  sessions are distilled and how many are pending, and a paused refresh says
+  so instead of finishing quietly.
+
 ## 0.6.1 — 2026-09-02
 
 The docs and the brand caught up with the product: a README with receipts, and a kit set on paper.

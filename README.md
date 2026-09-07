@@ -89,6 +89,11 @@ first release:
   wrong era.
 - **Honest refusal.** A golden query set (semantic, exact-match, must-refuse)
   runs with the test suite; retrieval changes must never regress the refusals.
+  An empty result says "no record", never a near miss dressed as an answer.
+- **Confidence you can read.** A hit is *strong* (semantically close),
+  *corroborated* (an exact term matched), or hidden as *weak*; `--include-weak`
+  shows the near misses, `--here` limits recall to the repository you are in,
+  and a stored bridge never outranks the note that actually answers you.
 
 `--handoff` prints a paste-ready block for whatever assistant you're in right
 now:
@@ -151,17 +156,35 @@ Five views over your map: corpus overview, theme bubbles by status, the
 longest-unfinished threads, and your full judgments history. One
 self-contained page, zero external requests, served only on 127.0.0.1.
 
-## Inside your assistant (MCP)
+## Inside your assistant
 
 ```bash
-claude mcp add alluvia -- uv run --directory <repo> alluvia mcp
+uv tool install alluvia && alluvia init          # once
+/plugin marketplace add dylanp12/alluvia          # in Claude Code
+/plugin install alluvia@alluvia
 ```
 
-Ten tools let Claude Code, Cursor, or any MCP client query your idea-map
-mid-conversation: `recall_now`, `recall_themes`, `find_connections`,
-`unfinished_threads`, `tensions_now`, `show_source`, `propose_next`,
-`list_proposals`, `rate_proposal`, and `get_digest`. *"You circled this in
-April. Here's where you landed."*
+From then on, every session in a repository starts with what alluvia knows
+about **that repository**: the decisions and problems from your last session
+there, the loops still open, earlier decisions, each line naming the session
+it came from. The same block comes back after every compaction, so a
+compacted thread does not lose what it was doing. When alluvia knows nothing
+about a repo, it injects nothing. (Injection needs an interactive session; in
+headless `claude -p` runs Claude Code applies no session-start context, though
+the capture hooks still run.)
+
+It works from transcripts already on your disk, distilled at session end and
+before compaction, with no resident process and no model call per tool use.
+Claude Code deletes transcripts after 30 days by default; alluvia's notes and
+receipts stay.
+
+Something wrong or stale? `alluvia forget <note-id>` and it never comes back.
+Ten MCP tools are wired by the same plugin: `recall_now`, `recall_themes`,
+`find_connections`, `unfinished_threads`, `tensions_now`, `show_source`,
+`propose_next`, `list_proposals`, `rate_proposal`, and `get_digest`, so Claude
+Code or Cursor can ask mid-conversation. *"You circled this in April. Here's
+where you landed."* Manual registration still works:
+`claude mcp add alluvia -- alluvia mcp`.
 
 ## Your machine, visible
 

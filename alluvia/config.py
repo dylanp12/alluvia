@@ -9,7 +9,7 @@ import tomllib
 DEFAULT_USER = "local"
 DISTILL_MODEL = "claude-haiku-4-5-20251001"   # legacy constants (unused by make_llm)
 LABEL_MODEL = "claude-haiku-4-5-20251001"
-PIPELINE_VERSION = 2      # v2: message-level meta-strip (re-distill required)
+PIPELINE_VERSION = 3      # v3: action lines + project identity (re-distill required)
 
 LLM_PROVIDER = "groq"
 _DEFAULT_MODELS = {
@@ -200,3 +200,9 @@ def write_config(data: dict) -> str:
     os.chmod(path, 0o600)
     reset_toml_cache()
     return path
+
+
+def handoff_dir() -> str:
+    """Per-project handoff cache written at session end, read at session start."""
+    return os.environ.get("ALLUVIA_HANDOFF_DIR",
+                          os.path.join(os.path.dirname(db_path()), "handoff"))
