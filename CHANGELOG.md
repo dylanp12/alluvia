@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## 0.8.0 — 2026-09-07
+
+Your memory is yours to move, and the record shows what it did.
+
+- **Portable memory.** `alluvia memory export` writes your distilled notes,
+  session metadata, suppressions, and mutes to one file; `alluvia memory import`
+  merges it on any machine, idempotently. Never raw conversations. Imported
+  sessions are never sent to the LLM, and this machine's own sessions always
+  win over an import.
+- **A repository can carry its own memory.** `alluvia repo share on` keeps
+  `.alluvia/memory.jsonl` current after every session and refresh; a fresh
+  clone or a second machine receives the repository's handoff on its first
+  session. Committing the directory is your act. `alluvia repo status` and
+  `alluvia repo share off` complete the set.
+- **Proof of use.** Every injected handoff is recorded with the notes it
+  showed. `alluvia handoff --kept | --noise` (and the MCP tool `rate_context`,
+  behind the MCP write switch) records your verdict; the session's own text is
+  checked for the notes it used and stored as a labeled proxy; recall counts
+  answers and refusals. `alluvia stats` shows all of it, counts only.
+- **One pitch.** README, PyPI description, and plugin copy now lead with: your
+  agent remembers this repo, and it will not lie about it.
+- The handoff footer asks for a verdict, and a lone session reads as
+  "1 session".
+
 ## 0.7.1 — 2026-09-06
 
 - **Windows paths.** A repository path recorded on another machine or OS is kept

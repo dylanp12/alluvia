@@ -26,6 +26,9 @@ _CLASSES: dict[str, tuple[str, str | None]] = {
     "digest_items": ("judgments", "SUM(LENGTH(snapshot))"),
     "muted_themes": ("judgments", None),
     "suppressed_notes": ("judgments", "SUM(LENGTH(COALESCE(reason,'')))"),
+    "handoff_events": ("judgments", "SUM(LENGTH(note_ids_json))"),
+    "handoff_verdicts": ("judgments", None),
+    "usage_counters": ("judgments", None),
 }
 
 

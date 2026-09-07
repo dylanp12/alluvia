@@ -84,3 +84,24 @@ def test_last_session_lines_lead_with_the_latest_decisions(repo):
     lines = [l for l in text.splitlines() if l.startswith("- [decision]")]
     assert lines[0].startswith("- [decision] zzz final call")
     assert lines[1].startswith("- [decision] pin clock skew") or lines[1].startswith("- [decision] aaa")
+
+
+def test_handoff_returns_its_note_ids_and_asks_for_a_verdict(repo):
+    from alluvia.handoff import build_project_handoff_with_ids
+    _seed(repo)
+    text, ids = build_project_handoff_with_ids(repo, "local", "/work/acme", now=T1)
+    assert set(ids) >= {"n:new-dec", "n:new-prob", "n:old-dec"}
+    assert "n:other" not in ids
+    assert "useful? alluvia handoff --kept" in text and "--noise" in text
+    assert build_project_handoff_with_ids(repo, "local", "/work/empty") == (None, [])
+
+
+def test_footer_counts_sessions_grammatically(repo):
+    _seed(repo)
+    repo.upsert_session(_sess("solo", "/work/solo", T1))
+    from alluvia.models import Note
+    repo.upsert_notes([Note(id="n:solo", user_id="local", session_id="claude-code:solo", span_ref="msg:0",
+                            kind="decision", text="one thing", created_at=T1)])
+    repo.mark_distilled("local", "claude-code:solo")
+    assert "1 session in this repo" in build_project_handoff(repo, "local", "/work/solo", now=T1)
+    assert "2 sessions in this repo" in build_project_handoff(repo, "local", "/work/acme", now=T1)

@@ -37,7 +37,10 @@ class Repo:
     _SESSION_COLS = ("id,user_id,source,native_id,title,started_at,ended_at,"
                      "messages_json,content_hash,project,branch")
 
-    def upsert_session(self, s: RawSession) -> bool:
+    def upsert_session(self, s: RawSession, imported_from: str | None = None) -> bool:
+        """`imported_from`: the session arrived in a memory bundle from another
+        machine — metadata only, no messages; its notes are real, its receipts
+        live on the origin."""
         row = self.conn.execute(
             "SELECT content_hash, project, branch FROM raw_sessions "
             "WHERE user_id=? AND id=?", (s.user_id, s.id)).fetchone()
@@ -55,18 +58,94 @@ class Repo:
         self.conn.execute(
             """INSERT INTO raw_sessions
                (id,user_id,source,native_id,title,started_at,ended_at,messages_json,
-                content_hash,project,branch)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                content_hash,project,branch,imported_from)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id,id) DO UPDATE SET
                  source=excluded.source, native_id=excluded.native_id, title=excluded.title,
                  started_at=excluded.started_at, ended_at=excluded.ended_at,
                  messages_json=excluded.messages_json, content_hash=excluded.content_hash,
-                 project=excluded.project, branch=excluded.branch""",
+                 project=excluded.project, branch=excluded.branch,
+                 imported_from=excluded.imported_from""",
             (s.id, s.user_id, s.source, s.native_id, s.title, _dts(s.started_at),
-             _dts(s.ended_at), messages_json, s.content_hash, s.project, s.branch),
+             _dts(s.ended_at), messages_json, s.content_hash, s.project, s.branch,
+             imported_from),
         )
         self.conn.commit()
         return True
+
+    def session_origins(self, user_id: str) -> dict[str, str]:
+        """Sessions that arrived by import, with where they came from."""
+        return {r[0]: r[1] for r in self.conn.execute(
+            "SELECT id, imported_from FROM raw_sessions "
+            "WHERE user_id=? AND imported_from IS NOT NULL", (user_id,))}
+
+    def session_content_hash(self, user_id: str, sid: str) -> str | None:
+        r = self.conn.execute("SELECT content_hash FROM raw_sessions WHERE user_id=? AND id=?",
+                              (user_id, sid)).fetchone()
+        return r[0] if r else None
+
+    # ---- proof of use (JUDGMENTS: what the memory did, never regenerated) ----
+    def record_handoff_event(self, user_id: str, project: str, note_ids: list[str],
+                             chars: int, source: str | None) -> str:
+        import hashlib
+        from datetime import datetime, timezone
+        at = datetime.now(timezone.utc).isoformat()
+        eid = "hev:" + hashlib.sha1(f"{project}|{at}".encode("utf-8")).hexdigest()[:12]
+        self.conn.execute(
+            "INSERT INTO handoff_events(id,user_id,project,created_at,note_ids_json,chars,source,"
+            "referenced_json) VALUES (?,?,?,?,?,?,?,NULL)",
+            (eid, user_id, project, at, json.dumps(note_ids), chars, source))
+        self.conn.commit()
+        return eid
+
+    def _event_row(self, r) -> dict:
+        return {"id": r[0], "project": r[1], "created_at": r[2], "note_ids": json.loads(r[3]),
+                "chars": r[4], "source": r[5],
+                "referenced_note_ids": json.loads(r[6]) if r[6] else []}
+
+    _EVENT_COLS = "id,project,created_at,note_ids_json,chars,source,referenced_json"
+
+    def latest_handoff_event(self, user_id: str, project: str) -> dict | None:
+        r = self.conn.execute(
+            f"SELECT {self._EVENT_COLS} FROM handoff_events WHERE user_id=? AND project=? "
+            "ORDER BY created_at DESC, id DESC LIMIT 1", (user_id, project)).fetchone()
+        return self._event_row(r) if r else None
+
+    def list_handoff_events(self, user_id: str) -> list[dict]:
+        return [self._event_row(r) for r in self.conn.execute(
+            f"SELECT {self._EVENT_COLS} FROM handoff_events WHERE user_id=? ORDER BY created_at",
+            (user_id,))]
+
+    def set_event_references(self, user_id: str, event_id: str, note_ids: list[str]) -> None:
+        self.conn.execute("UPDATE handoff_events SET referenced_json=? WHERE user_id=? AND id=?",
+                          (json.dumps(note_ids), user_id, event_id))
+        self.conn.commit()
+
+    def record_verdict(self, user_id: str, event_id: str, verdict: str,
+                       note_id: str | None = None) -> None:
+        from datetime import datetime, timezone
+        self.conn.execute(
+            "INSERT INTO handoff_verdicts(user_id,event_id,verdict,note_id,created_at) "
+            "VALUES (?,?,?,?,?)",
+            (user_id, event_id, verdict, note_id, datetime.now(timezone.utc).isoformat()))
+        self.conn.commit()
+
+    def list_verdicts(self, user_id: str) -> list[dict]:
+        return [{"event_id": r[0], "verdict": r[1], "note_id": r[2], "created_at": r[3]}
+                for r in self.conn.execute(
+                    "SELECT event_id, verdict, note_id, created_at FROM handoff_verdicts "
+                    "WHERE user_id=? ORDER BY id", (user_id,))]
+
+    def bump_counter(self, user_id: str, key: str, by: int = 1) -> None:
+        self.conn.execute(
+            "INSERT INTO usage_counters(user_id,key,count) VALUES (?,?,?) "
+            "ON CONFLICT(user_id,key) DO UPDATE SET count=count+excluded.count",
+            (user_id, key, by))
+        self.conn.commit()
+
+    def counters(self, user_id: str) -> dict[str, int]:
+        return {r[0]: r[1] for r in self.conn.execute(
+            "SELECT key, count FROM usage_counters WHERE user_id=? ORDER BY key", (user_id,))}
 
     def _drop_session_derived(self, user_id: str, session_id: str) -> None:
         ids = [r[0] for r in self.conn.execute(

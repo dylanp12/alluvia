@@ -204,6 +204,31 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             created_at TEXT NOT NULL,
             items_json TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS handoff_events (
+            id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            project TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            note_ids_json TEXT NOT NULL,
+            chars INTEGER NOT NULL,
+            source TEXT,
+            referenced_json TEXT,
+            PRIMARY KEY (user_id, id)
+        );
+        CREATE TABLE IF NOT EXISTS handoff_verdicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            note_id TEXT,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS usage_counters (
+            user_id TEXT NOT NULL,
+            key TEXT NOT NULL,
+            count INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (user_id, key)
+        );
         CREATE TABLE IF NOT EXISTS suppressed_notes (
             user_id TEXT NOT NULL,
             note_id TEXT NOT NULL,
@@ -249,7 +274,7 @@ def init_schema(conn: sqlite3.Connection, embed_dim: int) -> None:
             conn.execute(f"ALTER TABLE llm_health ADD COLUMN {col} "
                          f"INTEGER NOT NULL DEFAULT 0")
     scols = {r[1] for r in conn.execute("PRAGMA table_info(raw_sessions)")}
-    for col in ("project", "branch"):
+    for col in ("project", "branch", "imported_from"):
         if col not in scols:
             conn.execute(f"ALTER TABLE raw_sessions ADD COLUMN {col} TEXT")
     dcols = {r[1] for r in conn.execute("PRAGMA table_info(distilled_sessions)")}

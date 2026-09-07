@@ -600,6 +600,9 @@ def stats():
     themes = repo.list_themes(config.DEFAULT_USER)
     typer.echo(f"corpus: {len(repo.get_notes(config.DEFAULT_USER))} notes · "
                f"{len(themes)} themes · {len(repo.list_links(config.DEFAULT_USER))} links")
+    from alluvia.proof import stats_block
+    for line in stats_block(repo, config.DEFAULT_USER):
+        typer.echo(line)
 
 
 @app.command()
@@ -738,6 +741,150 @@ def _do_ingest(source: str, path: str) -> None:
         if repo.upsert_session(s):
             new += 1
     typer.echo(f"  {source}: {total} session(s), {new} new/changed")
+
+
+@app.command()
+def handoff(
+    kept: bool = typer.Option(False, "--kept", help="The context shown at session start was useful."),
+    noise: bool = typer.Option(False, "--noise", help="It was noise."),
+    note: str = typer.Option(None, "--note", help="Apply the verdict to one shown note id."),
+    event: str = typer.Option(None, "--event", help="A specific handoff event id (default: latest for this repo)."),
+):
+    """Tell alluvia whether the block it injected at session start earned its
+    place. Verdicts are yours, kept for good, and shown in `alluvia stats`."""
+    from alluvia.proof import record_verdict_for
+    from alluvia.projects import project_root
+    if kept == noise:
+        raise typer.BadParameter("say --kept or --noise")
+    verdict = "kept" if kept else "noise"
+    root = project_root(os.getcwd())
+    eid = record_verdict_for(_repo(), config.DEFAULT_USER, root, verdict, note_id=note, event_id=event)
+    if eid is None:
+        typer.echo("no handoff has been delivered for this repo yet — nothing to rate")
+        raise typer.Exit(1)
+    typer.echo(f"{verdict}: recorded against {eid}" + (f" for {note}" if note else ""))
+
+
+memory_app = typer.Typer(help="Portable memory: export/import your distilled notes and "
+                              "judgments as one file. Never raw sessions.")
+app.add_typer(memory_app, name="memory")
+
+
+@memory_app.command("export")
+def memory_export(
+    path: str = typer.Argument(..., help="Destination .jsonl file."),
+    project: str = typer.Option(None, "--project",
+                                help="Only this repository ('.' = the git root of the cwd)."),
+    project_relative: bool = typer.Option(False, "--project-relative",
+                                          help="Write the repository as 'this checkout' so an "
+                                               "importer binds it to its own root."),
+):
+    """Write your distilled notes, session metadata, suppressions, and mutes to
+    one file you can move with anything you own. No raw messages, ever."""
+    import json as _json
+    from alluvia.memory_bundle import export_bundle
+    from alluvia.projects import project_root
+    repo = _repo()
+    scope = project_root(os.getcwd()) if project == "." else project
+    recs = list(export_bundle(repo, config.DEFAULT_USER, project=scope,
+                              project_relative=project_relative))
+    with open(path, "w", encoding="utf-8") as f:
+        for r in recs:
+            f.write(_json.dumps(r, ensure_ascii=False) + "\n")
+    n_s = sum(1 for r in recs if r["kind"] == "session")
+    n_n = sum(1 for r in recs if r["kind"] == "note")
+    n_j = sum(1 for r in recs if r["kind"] in ("suppressed", "muted"))
+    if not n_s:
+        typer.echo(f"nothing known for that repo — header only → {path}")
+        return
+    typer.echo(f"exported {n_s} session{'s' if n_s != 1 else ''} · {n_n} note{'s' if n_n != 1 else ''}"
+               f" · {n_j} judgments → {path}")
+    typer.echo("  (distilled notes only; raw conversations never leave this machine)")
+
+
+@memory_app.command("import")
+def memory_import(path: str = typer.Argument(..., help="A file written by `alluvia memory export`.")):
+    """Merge a memory file into this machine's store. Idempotent: notes already
+    here are skipped, this machine's own sessions are never overwritten."""
+    import json as _json
+    from alluvia.memory_bundle import import_bundle
+    if not os.path.isfile(path):
+        typer.echo(f"no such file: {path}")
+        raise typer.Exit(1)
+    records = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(_json.loads(line))
+                except ValueError:
+                    records.append({"kind": "malformed"})
+    out = import_bundle(_repo(), config.DEFAULT_USER, records, embedder=_recall_embedder())
+    typer.echo(f"imported: sessions +{out['sessions_added']} · notes +{out['notes_added']} "
+               f"(already present: {out['notes_present']}) · judgments +{out['judgments_added']}"
+               + (f" · skipped {out['skipped']} malformed" if out["skipped"] else ""))
+    if out["notes_added"]:
+        typer.echo("  recall sees them now; `alluvia refresh` folds them into themes")
+
+
+repo_app = typer.Typer(help="Let a repository carry its own distilled memory (.alluvia/memory.jsonl).")
+app.add_typer(repo_app, name="repo")
+
+
+def _cwd_root() -> str:
+    from alluvia.projects import project_root
+    return project_root(os.getcwd())
+
+
+@repo_app.command("share")
+def repo_share(state: str = typer.Argument(..., help="on | off")):
+    """on: write this repository's distilled notes to .alluvia/memory.jsonl and keep
+    it current after every session (commit the directory to share it — with your
+    other machines, or with teammates). off: remove the file and the flag.
+    Notes only; raw conversations never enter the repository."""
+    from alluvia.repo_share import set_shared, share_file, write_share
+    root = _cwd_root()
+    if state == "on":
+        set_shared(root, True)
+        n = write_share(_repo(), config.DEFAULT_USER, root)
+        typer.echo(f"sharing on: {share_file(root)} ({n} note{'s' if n != 1 else ''})")
+        typer.echo("  commit .alluvia/ to carry this repo's memory with the checkout; "
+                   "it is rewritten after every session and refresh")
+    elif state == "off":
+        set_shared(root, False)
+        typer.echo("sharing off: .alluvia/memory.jsonl removed")
+    else:
+        raise typer.BadParameter("expected 'on' or 'off'")
+
+
+@repo_app.command("status")
+def repo_status():
+    """Is this repository sharing its memory, and how much is in the file?"""
+    import datetime as _dt
+    from alluvia.repo_share import is_shared, share_file
+    root = _cwd_root()
+    f = share_file(root)
+    if not is_shared(root):
+        typer.echo(f"sharing off for {root}  (alluvia repo share on)")
+        return
+    notes = sum(1 for l in f.read_text(encoding="utf-8").splitlines()
+                if l.strip().startswith('{"kind": "note"')) if f.exists() else 0
+    when = (_dt.datetime.fromtimestamp(f.stat().st_mtime, _dt.timezone.utc).isoformat(timespec="minutes")
+            if f.exists() else "never")
+    typer.echo(f"sharing on for {root}: {notes} note{'s' if notes != 1 else ''} in {f} · written {when}")
+
+
+@repo_app.command("export")
+def repo_export():
+    """Rewrite .alluvia/memory.jsonl now (normally automatic)."""
+    from alluvia.repo_share import is_shared, write_share
+    root = _cwd_root()
+    if not is_shared(root):
+        typer.echo("sharing is off for this repository — `alluvia repo share on` first")
+        raise typer.Exit(1)
+    n = write_share(_repo(), config.DEFAULT_USER, root)
+    typer.echo(f"written: {n} note{'s' if n != 1 else ''}")
 
 
 hook_app = typer.Typer(help="Claude Code hook handlers (wired by the alluvia plugin).")
@@ -1096,6 +1243,7 @@ def recall(
     hits = _recall(repo, _recall_embedder(), config.DEFAULT_USER, query,
                    limit=limit, git_root=git_root, project=scope,
                    include_weak=include_weak)
+    repo.bump_counter(config.DEFAULT_USER, "recall_answered" if hits else "recall_refused")
     warnings = recall_warnings(repo)
     if json_out:
         typer.echo(_json.dumps({"query": query, "scope": scope,

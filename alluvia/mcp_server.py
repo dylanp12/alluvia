@@ -243,6 +243,8 @@ def recall_now_impl(deps, problem: str, include_handoff: bool = True,
         limit = _cap(limit)
         hits = recall(deps.repo, deps.embedder, config.DEFAULT_USER,
                       _t(problem, 300), limit=limit)
+        deps.repo.bump_counter(config.DEFAULT_USER,
+                               "recall_answered" if hits else "recall_refused")
         out = {
             "summary": (f"found {len(hits)} prior thread(s) that likely matter"
                         if hits else "no prior context surfaced"),
@@ -303,6 +305,27 @@ def get_digest_impl(deps) -> dict:
                                       "snapshot": _t(i["snapshot"]),
                                       "outcome": i["outcome"]} for i in items]},
                 "pending": os.path.exists(flag)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def rate_context_impl(deps, verdict: str, note_id: str | None = None,
+                      project: str | None = None) -> dict:
+    """Write-gated like rate_proposal: a verdict on the context alluvia injected
+    at this repo's last session start."""
+    if not _writes_allowed():
+        return dict(_WRITES_DISABLED)
+    try:
+        if verdict not in ("kept", "noise"):
+            return {"error": "verdict must be 'kept' or 'noise'"}
+        import os as _os
+        from alluvia.projects import project_root
+        from alluvia.proof import record_verdict_for
+        root = project or project_root(_os.getcwd())
+        eid = record_verdict_for(deps.repo, config.DEFAULT_USER, root, verdict, note_id=note_id)
+        if eid is None:
+            return {"error": "no handoff has been delivered for this repo yet"}
+        return {"event": eid, "verdict": verdict, "note_id": note_id, "rated_via": "mcp"}
     except Exception as e:
         return {"error": str(e)}
 
@@ -395,6 +418,13 @@ def build_server(deps: SiftDeps | None = None):
         unfinished threads, and a proposal). If `pending` is true, surface it to
         the user at a natural moment. Relay only — never dismiss/keep on your own."""
         return get_digest_impl(d)
+
+    @mcp.tool()
+    def rate_context(verdict: str, note_id: str | None = None) -> dict:
+        """Rate the prior-context block alluvia injected at this session's start:
+        verdict 'kept' (it earned its place) or 'noise'. Optionally for one shown
+        note id. A judgment: yours, kept for good. Requires MCP writes enabled."""
+        return rate_context_impl(d, verdict, note_id=note_id)
 
     @mcp.tool()
     def rate_proposal(proposal_id: str, verdict: str, note: str | None = None) -> dict:

@@ -227,7 +227,10 @@ class Engine:
         if session is None:
             return []
         done = self.repo.distilled_session_ids(user_id, version=PIPELINE_VERSION)
-        if session_id in done and not force:
+        if (session_id in done and not force) or not session.messages:
+            # already done, or an imported session (metadata only, notes came
+            # with it): nothing to send to the LLM, and never a reason to drop
+            # the notes it carries
             return [n for n in self.repo.get_notes(user_id) if n.session_id == session_id]
         try:
             notes = self.distiller.distill(session)

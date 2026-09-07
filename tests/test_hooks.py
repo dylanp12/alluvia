@@ -117,3 +117,77 @@ def test_refresh_handoffs_writes_every_known_repo_and_clears_empty_ones(repo, tm
     assert written == 1
     assert "acme uses postgres" in handoff_path("/work/acme").read_text()
     assert not stale.exists(), "a repo with nothing known must not keep a stale handoff"
+
+
+def _shared_repo_with_memory(tmp_path):
+    """A clone that carries a memory file from another machine."""
+    from alluvia.repo_share import share_dir
+    import json as _json
+    clone = tmp_path / "clone"; (clone / ".git").mkdir(parents=True)
+    share_dir(str(clone)).mkdir()
+    recs = [{"kind": "header", "format": "alluvia-memory", "version": 1, "origin": "laptop-2", "pipeline_version": 3},
+            {"kind": "session", "id": "claude-code:remote1", "source": "claude-code", "native_id": "remote1",
+             "started_at": "2026-09-01T00:00:00+00:00", "ended_at": "2026-09-01T01:00:00+00:00",
+             "project": None, "project_rel": ".", "branch": "main", "content_hash": "h"},
+            {"kind": "note", "id": "n:remote", "session_id": "claude-code:remote1", "span_ref": "msg:0",
+             "note_kind": "decision", "text": "queue runs on postgres, not redis", "created_at": "2026-09-01T00:30:00+00:00"}]
+    (share_dir(str(clone)) / "memory.jsonl").write_text("\n".join(_json.dumps(r) for r in recs) + "\n")
+    return clone
+
+
+def test_session_start_imports_the_repos_shared_memory_first(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("ALLUVIA_HANDOFF_DIR", str(tmp_path / "handoff"))
+    clone = _shared_repo_with_memory(tmp_path)
+    out = run_session_start({"cwd": str(clone), "source": "startup"}, repo)
+    assert out is not None, "a fresh clone with a memory file must get its handoff on the first start"
+    assert "queue runs on postgres" in out["hookSpecificOutput"]["additionalContext"]
+    assert repo.session_origins("local") == {"claude-code:remote1": "laptop-2"}
+    # the sidecar/event machinery is exercised in the proof tasks; here: idempotent on the second start
+    again = run_session_start({"cwd": str(clone), "source": "resume"}, repo)
+    assert "queue runs on postgres" in again["hookSpecificOutput"]["additionalContext"]
+
+
+def test_capture_and_refresh_rewrite_the_share_when_on(repo, tmp_path, monkeypatch):
+    from alluvia.repo_share import is_shared, set_shared, share_file
+    from alluvia.hooks import refresh_handoffs
+    monkeypatch.setenv("ALLUVIA_HANDOFF_DIR", str(tmp_path / "handoff"))
+    project = tmp_path / "acme"
+    transcript = _transcript(tmp_path, project)
+    set_shared(str(project), True)
+    eng = Engine(repo, FakeEmbedder(dim=8), FakeLLM([{"notes": [
+        {"kind": "decision", "text": "pin clock skew in auth/refresh.py", "span": "msg:1"}]}]),
+                 min_cluster_size=2)
+    run_capture({"transcript_path": str(transcript), "cwd": str(project)}, repo, eng)
+    assert share_file(str(project)).exists()
+    assert "pin clock skew" in share_file(str(project)).read_text()
+    share_file(str(project)).unlink()
+    refresh_handoffs(repo, "local")
+    assert share_file(str(project)).exists(), "refresh rewrites shares for repos that opted in"
+    set_shared(str(project), False)
+    refresh_handoffs(repo, "local")
+    assert not share_file(str(project)).exists() and not is_shared(str(project))
+
+
+def test_injection_records_an_event_with_the_note_ids(repo, tmp_path, monkeypatch):
+    """Proof of use starts with knowing what was shown, when, and where."""
+    import json as _json
+    from alluvia.hooks import write_handoff, handoff_path
+    from alluvia.models import Message, Note, RawSession, content_hash
+    monkeypatch.setenv("ALLUVIA_HANDOFF_DIR", str(tmp_path / "handoff"))
+    project = tmp_path / "acme"; (project / ".git").mkdir(parents=True)
+    msgs = [Message(role="user", text="x")]
+    repo.upsert_session(RawSession(id="claude-code:s", user_id="local", source="claude-code", native_id="s",
+                                   title="t", started_at=None, ended_at=None, messages=msgs,
+                                   content_hash=content_hash(msgs), project=str(project), branch="main"))
+    repo.upsert_notes([Note(id="n:d", user_id="local", session_id="claude-code:s", span_ref="msg:0",
+                            kind="decision", text="use postgres", created_at=None)])
+    assert write_handoff(repo, "local", str(project))
+    sidecar = handoff_path(str(project)).with_suffix(".json")
+    assert _json.loads(sidecar.read_text())["note_ids"] == ["n:d"]
+    assert repo.list_handoff_events("local") == []                      # writing is not showing
+    out = run_session_start({"cwd": str(project), "source": "startup"}, repo)
+    assert out
+    ev = repo.latest_handoff_event("local", str(project))
+    assert ev["note_ids"] == ["n:d"] and ev["source"] == "startup" and ev["chars"] > 0
+    run_session_start({"cwd": str(tmp_path / "elsewhere"), "source": "startup"}, repo)
+    assert len(repo.list_handoff_events("local")) == 1                  # nothing shown, no event

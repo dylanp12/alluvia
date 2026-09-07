@@ -19,8 +19,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from alluvia import config
-from alluvia.handoff import build_project_handoff
+from alluvia.handoff import build_project_handoff_with_ids
 from alluvia.projects import project_key, project_root
+from alluvia.repo_share import import_share_if_changed, is_shared, write_share
+
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def parse_payload(raw: str) -> dict:
@@ -47,26 +52,52 @@ def run_session_start(payload: dict, repo) -> dict | None:
     project = _project_of(payload)
     if not project:
         return None
-    path = handoff_path(project)
     _stamp(repo, "hook:last_run")
+    try:
+        # a repo that carries its own memory (.alluvia/memory.jsonl) is imported
+        # first — SQLite only, milliseconds — so a fresh clone or a second
+        # machine gets the repo's handoff on its very first session
+        imported = import_share_if_changed(repo, config.DEFAULT_USER, project)
+        if imported and (imported["sessions_added"] or imported["notes_added"]):
+            write_handoff(repo, config.DEFAULT_USER, project)
+    except Exception as e:                       # noqa: BLE001 — never block the session
+        log.warning("repo memory import skipped: %r", e)
+    path = handoff_path(project)
     if not path.exists():
         return None
     text = path.read_text(encoding="utf-8").strip()
     if not text:
         return None
+    try:
+        side = json.loads(sidecar_path(project).read_text(encoding="utf-8"))
+        ids = list(side.get("note_ids") or [])
+    except (OSError, ValueError):
+        ids = []
+    repo.record_handoff_event(config.DEFAULT_USER, project, ids, chars=len(text),
+                              source=payload.get("source"))
     return {"hookSpecificOutput": {"hookEventName": "SessionStart",
                                    "additionalContext": text}}
 
 
+def sidecar_path(project: str) -> Path:
+    return handoff_path(project).with_suffix(".json")
+
+
 def write_handoff(repo, user_id: str, project: str, now=None) -> bool:
-    text = build_project_handoff(repo, user_id, project, now=now)
+    """Cache text + a JSON sidecar naming the notes it shows (proof of use
+    needs to know what was on screen, not just that something was)."""
+    text, ids = build_project_handoff_with_ids(repo, user_id, project, now=now)
     path = handoff_path(project)
     path.parent.mkdir(parents=True, exist_ok=True)
     if text is None:
-        if path.exists():
-            path.unlink()
+        for f in (path, sidecar_path(project)):
+            if f.exists():
+                f.unlink()
         return False
     path.write_text(text, encoding="utf-8")
+    sidecar_path(project).write_text(json.dumps({
+        "note_ids": ids, "chars": len(text),
+        "written_at": datetime.now(timezone.utc).isoformat()}), encoding="utf-8")
     return True
 
 
@@ -96,9 +127,25 @@ def run_capture(payload: dict, repo, engine, now=None) -> dict:
         stats["distill_error"] = repr(e)          # must never cost the user the
     #                                               handoff built from what is known
     if project:
+        _mark_references(repo, user, project, session)
         stats["handoff_written"] = write_handoff(repo, user, project, now=now)
+        if is_shared(project):
+            stats["share_notes"] = write_share(repo, user, project)
     _stamp(repo, "hook:last_run")
     return stats
+
+
+def _mark_references(repo, user_id: str, project: str, session) -> None:
+    """Proxy signal: which of the notes shown at this repo's last session start
+    did the session's own text end up using? Labeled a proxy wherever shown."""
+    from alluvia.proof import referenced_notes
+    ev = repo.latest_handoff_event(user_id, project)
+    if not ev or not ev["note_ids"]:
+        return
+    wanted = set(ev["note_ids"])
+    notes = {n.id: n.text for n in repo.get_notes(user_id) if n.id in wanted}
+    text = "\n".join(m.text for m in session.messages if m.role == "assistant")
+    repo.set_event_references(user_id, ev["id"], referenced_notes(notes, text))
 
 
 def refresh_handoffs(repo, user_id: str, now=None) -> int:
@@ -106,4 +153,10 @@ def refresh_handoffs(repo, user_id: str, now=None) -> int:
     FIRST session after a backfill already receives its context. Repos with
     nothing known lose any stale cache. Returns how many were written."""
     projects = sorted({s["project"] for s in repo.list_session_meta(user_id) if s["project"]})
-    return sum(1 for p in projects if write_handoff(repo, user_id, p, now=now))
+    written = 0
+    for p in projects:
+        if write_handoff(repo, user_id, p, now=now):
+            written += 1
+        if is_shared(p):
+            write_share(repo, user_id, p)
+    return written

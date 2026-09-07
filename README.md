@@ -17,56 +17,93 @@
 
 # alluvia
 
-Every conversation you've ever had with an AI tool is sediment. Most of it is
-sand, but scattered through it are the nuggets: ideas you never chased,
-solutions you solved once and forgot, threads you meant to finish. alluvia is
-the pan.
+**Your agent remembers this repo, and it will not lie about it.**
 
-You think through problems in Claude Code. You debug in Cursor. You explore in
-ChatGPT. Each tool remembers nothing about the others, and neither do you. The
-idea you need today is sitting in a session from last spring, in a different
-app, under a title you'll never search for. alluvia finds it, and shows you
-where it found it.
+Every Claude Code session in a repository starts with what you already decided
+there: the decisions and problems from your last session, the loops still
+open, earlier decisions, each line naming the session it came from. The same
+block comes back after every compaction. When alluvia knows nothing about a
+repo, it injects nothing. When you ask a question and there is no record, it
+says "no record" instead of inventing one.
 
-> *"I know I've already thought about this. Resurface it inside the tool I'm
-> using now, with the receipts, without giving another cloud service my raw
-> history."* That sentence is the product.
-
-**Local-first recall for AI-assisted work: across tools, with receipts and
-human judgment.** Not another "AI memory": your raw sessions never leave the
-machine, every answer quotes the session it came from, and when there is no
-record it says so instead of inventing one.
-
-alluvia ingests all of it into one local store, distills it into atomic notes,
-clusters those into themes, and then does the part nothing else does: **it
-finds the bridges**, the places where your past self already met the problem
-your present self is holding.
-
-> **A true story from alluvia's own validation gate:** a security review in one
-> tool flagged a server-side validation gap. `alluvia connections` linked it to
-> debugging sessions in a *different* tool from **14 months earlier**: same
-> root cause, long forgotten. Then `alluvia propose` turned that bridge into a
-> concrete fix plan, cited back to both sources. The human kept it.
-> Every claim in this README traces to a logged validation gate; see
-> [docs/validation](docs/validation/).
+Local-first, MIT. Raw conversations never leave your machine.
 
 ## Sixty seconds
 
-![alluvia finding a cross-tool bridge](https://alluvia.dev/alluvia-demo.gif)
-
-*([the full replay](https://alluvia.dev/alluvia-demo.mp4), rendered from real
-pipeline output; the team dashboard has its own replay on
-[alluvia.dev](https://alluvia.dev))*
-
 ```bash
-uv tool install alluvia    # or: pip install alluvia
-alluvia demo               # every lens in 30s: no API key, synthetic data
-alluvia init               # detect your sources, choose your provider
-alluvia refresh            # distill → embed → cluster → map (local embeddings)
-alluvia recall "the thing I'm debugging"   # cited recall from your own history
+uv tool install alluvia && alluvia init          # detect your sources, pick a provider
+alluvia refresh                                  # distill what is already on disk (local embeddings)
+/plugin marketplace add dylanp12/alluvia          # in Claude Code
+/plugin install alluvia@alluvia
 ```
 
-One-shot trial without installing: `uvx alluvia init`.
+No plugin yet? `alluvia demo` shows every lens in 30 seconds on synthetic data,
+and `alluvia recall "the thing I'm debugging"` answers from your own history.
+
+## What arrives at session start
+
+Real output, from alluvia's own repository, the session after it was built:
+
+```
+alluvia · prior context for this repo (alluvia)
+last session 2026-09-05 on release/0.6.1:
+- [decision] Implement replace-on-full behavior in the store and both engine paths. (session 19b79170)
+- [decision] Implement union-on-partial behavior in the store and both engine paths. (session 19b79170)
+- [decision] Pull funnel data: site traffic, repo traffic, PyPI installs, and cloud signups (session 19b79170)
+1 session in this repo
+prior context, not ground truth — verify against the code. more: alluvia recall "<question>" --here · wrong? alluvia forget <note-id>
+useful? alluvia handoff --kept · noise? alluvia handoff --noise
+```
+
+Captured at session end and before compaction, distilled in bounded windows
+that always keep the end of the session (where decisions land), with no
+resident process and no model call per tool use. Injection needs an
+interactive session; headless `claude -p` runs receive no session-start
+context in Claude Code, though the capture hooks still run.
+
+## Memory you can trust
+
+- **Receipts.** Every line names its session; every recall hit carries the
+  verbatim quote behind it, string-match verified.
+- **Confidence you can read.** A hit is *strong*, *corroborated* by an exact
+  term, or hidden as *weak*. A stored bridge never outranks the note that
+  actually answers you.
+- **Honest refusal.** No record means "no record". A golden query set of
+  must-refuse questions runs with the test suite.
+- **Correctable.** `alluvia forget <note-id>` suppresses a wrong or stale note
+  everywhere, for good, without touching raw sessions.
+- **Nothing of yours becomes a note.** Harness-injected content (skill bodies,
+  command expansions, compaction summaries) is never treated as your thinking.
+
+## Your history, owned
+
+Claude Code deletes transcripts after 30 days by default. alluvia's notes and
+receipts stay, and they are yours to move:
+
+```bash
+alluvia memory export ~/memory.jsonl     # distilled notes + judgments, never raw
+alluvia memory import ~/memory.jsonl     # on the other machine: idempotent merge
+alluvia repo share on                    # opt-in: this repo carries its own memory in .alluvia/
+```
+
+With sharing on, a fresh clone or a second machine receives the repository's
+handoff on its first session. Committing `.alluvia/` is your act; alluvia
+never touches git. Sources: Claude Code, Cursor, Codex CLI, Gemini CLI,
+OpenCode, the Cline family, ChatGPT exports, and any tool that writes a
+[normalized JSONL](docs/SOURCES.md).
+
+## Proof, not vibes
+
+```
+$ alluvia stats
+handoffs: 12 delivered · 41 lines · kept 5 · noise 1 · referenced (proxy) 17/41
+recall:   38 answered · 9 said no record
+forget:   3 notes suppressed
+```
+
+`alluvia handoff --kept` or `--noise` records your verdict on what was shown;
+the reference count is a labeled proxy (the session's own text used the note's
+terms or files). Counts only, never rates dressed up as accuracy.
 
 ## Recall: the front door
 
@@ -158,13 +195,8 @@ self-contained page, zero external requests, served only on 127.0.0.1.
 
 ## Inside your assistant
 
-```bash
-uv tool install alluvia && alluvia init          # once
-/plugin marketplace add dylanp12/alluvia          # in Claude Code
-/plugin install alluvia@alluvia
-```
-
-From then on, every session in a repository starts with what alluvia knows
+Installed as above (`/plugin install alluvia@alluvia`), every session in a
+repository starts with what alluvia knows
 about **that repository**: the decisions and problems from your last session
 there, the loops still open, earlier decisions, each line naming the session
 it came from. The same block comes back after every compaction, so a
