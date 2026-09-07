@@ -191,3 +191,64 @@ def test_injection_records_an_event_with_the_note_ids(repo, tmp_path, monkeypatc
     assert ev["note_ids"] == ["n:d"] and ev["source"] == "startup" and ev["chars"] > 0
     run_session_start({"cwd": str(tmp_path / "elsewhere"), "source": "startup"}, repo)
     assert len(repo.list_handoff_events("local")) == 1                  # nothing shown, no event
+
+
+def _sync_stub(result, calls=None):
+    def sync(repo, user, **kw):
+        if calls is not None:
+            calls.append(user)
+        if isinstance(result, Exception):
+            raise result
+        return result
+    return sync
+
+
+def test_capture_syncs_memory_and_never_fails_on_it(repo, tmp_path, monkeypatch):
+    """Sign in once: every capture carries memory up and down. Signed out, the
+    hook says so and touches nothing. A failing sync costs the user nothing."""
+    from alluvia import cloud_memory
+    monkeypatch.setenv("ALLUVIA_HANDOFF_DIR", str(tmp_path / "handoff"))
+    project = tmp_path / "acme"
+    transcript = _transcript(tmp_path, project)
+    eng = Engine(repo, FakeEmbedder(dim=8), FakeLLM([{"notes": [
+        {"kind": "decision", "text": "pin clock skew in auth/refresh.py", "span": "msg:1"}]}] * 3),
+                 min_cluster_size=2)
+    stats = run_capture({"transcript_path": str(transcript), "cwd": str(project)}, repo, eng)
+    assert stats["cloud"] == {"ok": False, "skipped": "not signed in"}      # no session file
+    calls = []
+    monkeypatch.setattr(cloud_memory, "sync", _sync_stub(
+        {"ok": True, "pull": {"ok": True, "notes_added": 0}, "push": {"ok": True, "notes": 1}}, calls))
+    stats = run_capture({"transcript_path": str(transcript), "cwd": str(project)}, repo, eng)
+    assert calls == ["local"] and stats["cloud"]["ok"] is True
+    monkeypatch.setattr(cloud_memory, "sync", _sync_stub(RuntimeError("dns is down")))
+    stats = run_capture({"transcript_path": str(transcript), "cwd": str(project)}, repo, eng)
+    assert stats["handoff_written"] and "dns is down" in stats["cloud"]["error"]
+
+
+def test_capture_rebuilds_handoffs_for_what_the_pull_brought(repo, tmp_path, monkeypatch):
+    """Another machine's notes arrive during the pull; the NEXT session start in
+    that repo must already see them, so every known repo's handoff is rebuilt."""
+    from alluvia import cloud_memory
+    from alluvia.models import Message, Note, RawSession, content_hash
+    monkeypatch.setenv("ALLUVIA_HANDOFF_DIR", str(tmp_path / "handoff"))
+    project = tmp_path / "acme"
+    transcript = _transcript(tmp_path, project)
+    other = str(tmp_path / "other")
+
+    def pulling_sync(repo_, user, **kw):
+        msgs = [Message(role="user", text="remote")]
+        repo_.upsert_session(RawSession(id="claude-code:r1", user_id=user, source="claude-code",
+                                        native_id="r1", title="", started_at=None, ended_at=None,
+                                        messages=[], content_hash=content_hash(msgs),
+                                        project=other, branch="main"), imported_from="laptop-2")
+        repo_.mark_distilled(user, "claude-code:r1")
+        repo_.upsert_notes([Note(id="n:r", user_id=user, session_id="claude-code:r1", span_ref="msg:0",
+                                 kind="decision", text="queue runs on postgres", created_at=None)])
+        return {"ok": True, "pull": {"ok": True, "notes_added": 1}, "push": {"ok": True, "notes": 2}}
+    monkeypatch.setattr(cloud_memory, "sync", pulling_sync)
+    eng = Engine(repo, FakeEmbedder(dim=8), FakeLLM([{"notes": [
+        {"kind": "decision", "text": "pin clock skew in auth/refresh.py", "span": "msg:1"}]}]),
+                 min_cluster_size=2)
+    run_capture({"transcript_path": str(transcript), "cwd": str(project)}, repo, eng)
+    assert "queue runs on postgres" in handoff_path(other).read_text()
+    assert "pin clock skew" in handoff_path(str(project)).read_text()

@@ -100,39 +100,61 @@ def _default_health():
     return _process_health
 
 
-def _managed_distill_llm(health=None, on_wait=None):
-    """Distill LLM routed through Alluvia's managed gateway under the team's virtual
-    key (opt-in). None when not logged in or the key can't be fetched, so make_llm
-    falls back to the normal BYOK/local path. Transcripts are already secret+PII
-    scrubbed before they reach any LLM (distill/scrub.redact)."""
-    import logging
+class ManagedKeyUnavailable(Exception):
+    """The account's managed key could not be fetched (signed out, offline, or
+    the service refused). Classified like a 401 so the Governor treats it as
+    terminal for this run and moves to the next candidate instead of sleeping."""
+    status_code = 401
+
+
+class ManagedLLM:
+    """Alluvia Cloud's managed distillation as one candidate in the chain.
+    Lazy: the account's virtual key is fetched from the service on first use
+    and cached for the process; nothing is fetched when the user's own provider
+    answers first. Transcripts are secret+PII scrubbed before any LLM sees them."""
+    model = "alluvia-cloud"
+
+    def __init__(self, session_loader=None, key_fetcher=None):
+        from alluvia import cloudclient
+        self._load = session_loader or cloudclient.load_session
+        self._fetch = key_fetcher or cloudclient.fetch_distill_key
+        self._inner = None
+
+    def _inner_(self):
+        if self._inner is None:
+            sess = self._load() or {}
+            info = None
+            if sess.get("url") and sess.get("token"):
+                info = self._fetch(sess["url"], sess["token"])
+            if not info or not info.get("key") or not info.get("base_url"):
+                raise ManagedKeyUnavailable(
+                    "managed distillation unavailable: could not fetch the account key "
+                    "(alluvia cloud status)")
+            self._inner = OpenAICompatLLM(info.get("model") or "alluvia-distill",
+                                          api_key=info["key"], base_url=info["base_url"])
+        return self._inner
+
+    def complete_json(self, system: str, user: str) -> Any:
+        return self._inner_().complete_json(system, user)
+
+
+def _signed_in(session_loader) -> bool:
     from alluvia import cloudclient
-    sess = cloudclient.load_session()
-    if not sess or not sess.get("token") or not sess.get("url"):
-        return None
-    info = cloudclient.fetch_distill_key(sess["url"], sess["token"])
-    if not info or not info.get("key") or not info.get("base_url"):
-        return None
-    from alluvia.llm.governor import Governor
-    model = info.get("model") or "alluvia-distill"
-    adapter = OpenAICompatLLM(model, api_key=info["key"], base_url=info["base_url"])
-    logging.getLogger("alluvia").info(
-        "managed distillation active: scrubbed + PII-redacted transcripts are distilled "
-        "via Alluvia's gateway under your team's budget-capped key")
-    return Governor("managed-distill", [(model, adapter)],
-                    store=health if health is not None else _default_health(),
-                    patience=config.llm_patience(), on_wait=on_wait)
+    sess = (session_loader or cloudclient.load_session)()
+    return bool(sess and sess.get("token") and sess.get("url"))
 
 
-def make_llm(role: str | None = None, health=None, on_wait=None) -> LLM:
+def make_llm(role: str | None = None, health=None, on_wait=None,
+             session_loader=None, key_fetcher=None) -> LLM:
     """Role-aware factory: ALLUVIA_LLM_MODEL_<ROLE> -> ALLUVIA_LLM_MODEL -> provider
     default, expanded to the role's fallthrough chain and wrapped in a
     Governor (backoff, per-model breakers, chain fallthrough — see
-    llm/governor.py). Roles: distill, label, status, why, propose."""
-    if role == "distill" and config.managed_distillation():
-        managed = _managed_distill_llm(health, on_wait)
-        if managed is not None:
-            return managed
+    llm/governor.py). Roles: distill, label, status, why, propose.
+
+    Distill only, once signed in to Alluvia Cloud: the managed gateway joins the
+    chain — last by default, first when ALLUVIA_MANAGED_DISTILL=1, alone when no
+    provider key is configured, never when =0. A refresh does not stall on one
+    rate-limited provider."""
     from alluvia.llm.governor import Governor
     provider = config.llm_provider()
     if provider not in ("anthropic", "openai", "groq"):
@@ -140,6 +162,15 @@ def make_llm(role: str | None = None, health=None, on_wait=None) -> LLM:
     key = config.provider_key(provider)          # env > config.toml [keys]
     candidates = [(m, _adapter(provider, m, key))
                   for m in config.llm_chain(provider, role)]
+    pref = config.managed_distillation() if role == "distill" else False
+    if pref is not False and _signed_in(session_loader):
+        managed = (ManagedLLM.model, ManagedLLM(session_loader, key_fetcher))
+        if pref is True:
+            candidates = [managed] + candidates
+        elif key is None:
+            candidates = [managed]
+        else:
+            candidates = candidates + [managed]
     return Governor(provider, candidates,
                     store=health if health is not None else _default_health(),
                     patience=config.llm_patience(), on_wait=on_wait)

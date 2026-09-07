@@ -54,7 +54,46 @@ def fetch_distill_key(url: str, token: str) -> dict | None:
 
 
 class SyncError(Exception):
-    pass
+    def __init__(self, message: str, code: int | None = None):
+        super().__init__(message)
+        self.code = code
+
+
+def _request(url: str, path: str, token: str, method: str = "GET",
+             body: dict | None = None, timeout: float = 15) -> dict:
+    req = urllib.request.Request(
+        url.rstrip("/") + path,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Authorization": f"Bearer {token}",
+                 "Content-Type": "application/json"},
+        method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        raise SyncError(f"server returned {e.code}: {e.read().decode()[:200]}",
+                        code=e.code) from e
+    except urllib.error.URLError as e:
+        raise SyncError(f"cannot reach {url}: {e.reason}") from e
+    except (OSError, ValueError) as e:                     # timeouts, bad JSON
+        raise SyncError(f"cannot reach {url}: {e}") from e
+
+
+def post_memory(url: str, token: str, records: list) -> dict:
+    """Upsert never-raw memory records (the 0.8 bundle format) for the account."""
+    return _request(url, "/api/memory", token, method="POST", body={"records": list(records)})
+
+
+def get_billing(url: str, token: str) -> dict:
+    """Plan and managed-distillation usage for the account: {plan, status, usage}."""
+    return _request(url, "/api/billing", token)
+
+
+def get_memory(url: str, token: str, since: str | None = None) -> dict:
+    """Records updated after `since` (all when None) plus the server clock."""
+    import urllib.parse
+    q = "?" + urllib.parse.urlencode({"since": since}) if since else ""
+    return _request(url, "/api/memory" + q, token)
 
 
 def push_bundle(url: str, token: str, bundle: dict) -> dict:

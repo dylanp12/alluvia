@@ -18,7 +18,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from alluvia import config
+from alluvia import cloud_memory, config
 from alluvia.handoff import build_project_handoff_with_ids
 from alluvia.projects import project_key, project_root
 from alluvia.repo_share import import_share_if_changed, is_shared, write_share
@@ -126,11 +126,22 @@ def run_capture(payload: dict, repo, engine, now=None) -> dict:
     except Exception as e:                        # noqa: BLE001 — a failed distill
         stats["distill_error"] = repr(e)          # must never cost the user the
     #                                               handoff built from what is known
+    # signed in: memory goes up and comes down here, bounded by the client's
+    # timeouts; signed out this is the honest 'skipped' with no network at all
+    try:
+        stats["cloud"] = cloud_memory.sync(repo, user)
+    except Exception as e:                        # noqa: BLE001 — never fail the hook
+        stats["cloud"] = {"ok": False, "error": repr(e)}
+    pulled = (stats["cloud"].get("pull") or {}).get("notes_added", 0) if stats["cloud"].get("ok") else 0
     if project:
         _mark_references(repo, user, project, session)
         stats["handoff_written"] = write_handoff(repo, user, project, now=now)
         if is_shared(project):
             stats["share_notes"] = write_share(repo, user, project)
+    if pulled:
+        # another machine's notes arrived: every repo's next session start
+        # should already see them, not wait for a hook to run there
+        stats["handoffs_rebuilt"] = refresh_handoffs(repo, user, now=now)
     _stamp(repo, "hook:last_run")
     return stats
 

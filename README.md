@@ -92,6 +92,22 @@ never touches git. Sources: Claude Code, Cursor, Codex CLI, Gemini CLI,
 OpenCode, the Cline family, ChatGPT exports, and any tool that writes a
 [normalized JSONL](docs/SOURCES.md).
 
+Or remember one command and skip the files:
+
+```bash
+alluvia cloud login       # once, on each machine
+```
+
+After that, memory follows you: the same never-raw bundle syncs up after
+every session and refresh and down before, so a second machine receives
+everything on its first refresh. And a refresh never stalls: when your own
+provider is rate-limited or you have no key at all, distillation falls
+through to Alluvia Cloud's managed gateway under your account's monthly
+budget. Cloud Free includes $5 of managed distillation a month; Pro ($25 a
+month) raises it to $20. `alluvia cloud status` shows the plan, what is
+left this month, and when memory last synced. Never signing in is a
+complete product: everything above works forever, locally.
+
 ## Proof, not vibes
 
 ```
@@ -238,6 +254,8 @@ so far is saved and resumes on the next run.
 | Raw conversations | **Nowhere.** Local SQLite, forever yours |
 | Embeddings | **Nowhere.** Computed locally (fastembed/ONNX) |
 | Distill / label / propose calls | Your configured LLM provider, under your API key, secret-scrubbed first |
+| Cloud memory sync | Only after `alluvia cloud login`. Distilled notes, session metadata, and your judgments, never raw history |
+| Managed distillation | Only after sign-in, and only when your own provider is limited or absent. Secret-scrubbed transcripts, under your account's monthly budget |
 | Team sync | Opt-in only (`alluvia cloud sync`). Distilled notes, never raw history |
 | Telemetry | **There is none.** |
 
@@ -308,27 +326,34 @@ That's how **multi-machine** setups work with no cloud (aggregate your hosts'
 histories into one directory), and how tools we don't ship a parser for
 arrive already normalized. Community feeders welcome.
 
-## For teams: Alluvia Cloud
+## Alluvia Cloud: one sign-in, then it just works
 
-The same pipeline, multiplayer. Teams opt in to sync **distilled notes only**
-(raw history still never leaves each machine) into a shared index, so anyone
-can ask what the team already figured out and get the answer with receipts:
+```bash
+alluvia cloud login       # the one thing to remember
+alluvia cloud status      # plan · managed budget left this month · last memory sync
+```
+
+| Tier | Price | What it adds |
+|---|---|---|
+| Open Source | $0 | Everything above, forever, on your machine |
+| Cloud Free | $0 | Memory synced across your machines; refresh falls through to managed distillation, $5 a month included |
+| Cloud Pro | $25 a month | $20 a month of managed distillation, priority backfill |
+| Team | $20 a seat a month | Shared recall with receipts, verified answers, a registry of decisions |
+| Enterprise | contact | SSO/SAML, audit, self-host |
+
+For teams it is the same pipeline, multiplayer: opt in to sync **distilled
+notes only** (raw history still never leaves each machine) into a shared
+index, so anyone can ask what the team already figured out and get the answer
+with receipts:
 
 > *"Yes. That was fixed in March, in the token-refresh module, by pinning the
 > clock skew. Here are the sessions."* Or an honest *"no record of that."*
 
 Team recall with citations, verified answers (confirm one, and everyone gets
 the verified version first), and a living registry of decisions, including
-what superseded them.
+what superseded them (`alluvia cloud sync`).
 
-```bash
-alluvia cloud login       # then:
-alluvia cloud sync        # distilled notes up; raw history stays home
-alluvia cloud status
-```
-
-Sign-ups are open at [alluvia.dev](https://alluvia.dev). Free for founding
-teams during early access.
+Sign-ups are open at [alluvia.dev](https://alluvia.dev).
 
 ---
 

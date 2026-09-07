@@ -38,3 +38,42 @@ def test_push_bundle_sends_bearer_and_json(monkeypatch):
     assert captured["url"] == "https://api.example.com/sync"
     assert captured["auth"] == "Bearer tok"
     assert captured["body"]["notes"] == [{"id": "n1"}]
+
+
+def test_memory_helpers_use_api_memory_with_a_short_timeout(monkeypatch):
+    from alluvia import cloudclient
+    seen = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({"records": [], "server_time": "t"}).encode()
+
+    def fake_urlopen(req, timeout=0):
+        seen.append((req.get_method(), req.full_url, timeout, req.data))
+        return FakeResp()
+
+    monkeypatch.setattr(cloudclient.urllib.request, "urlopen", fake_urlopen)
+    cloudclient.post_memory("https://api.example.com/", "tok", [{"kind": "muted", "label": "x"}])
+    cloudclient.get_memory("https://api.example.com", "tok", since="2026-09-07T09:05:00+00:00")
+    assert seen[0][:3] == ("POST", "https://api.example.com/api/memory", 15)
+    assert json.loads(seen[0][3]) == {"records": [{"kind": "muted", "label": "x"}]}
+    assert seen[1][:3] == ("GET", "https://api.example.com/api/memory"
+                           "?since=2026-09-07T09%3A05%3A00%2B00%3A00", 15)
+
+
+def test_http_error_carries_its_status(monkeypatch):
+    import io
+    import urllib.error
+    from alluvia import cloudclient
+
+    def fake_urlopen(req, timeout=0):
+        raise urllib.error.HTTPError(req.full_url, 401, "expired", {}, io.BytesIO(b"expired"))
+
+    monkeypatch.setattr(cloudclient.urllib.request, "urlopen", fake_urlopen)
+    try:
+        cloudclient.get_memory("https://api.example.com", "tok")
+    except cloudclient.SyncError as e:
+        assert e.code == 401
+    else:
+        raise AssertionError("expected SyncError")

@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+## 0.9.0 — 2026-09-07
+
+One thing to remember: `alluvia cloud login`. Then memory follows you, and a
+refresh never stalls.
+
+- **Memory follows you.** After sign-in, the never-raw bundle (session
+  metadata, distilled notes, suppressions, mutes) syncs up after every session
+  and refresh and down before, so a second machine receives everything on its
+  first refresh. No command to run, nothing to schedule. Files
+  (`alluvia memory export/import`) and repository-carried memory stay for
+  people who prefer them or never sign in.
+- **A refresh never stalls.** Once signed in, Alluvia Cloud's managed
+  distillation joins the distill chain as the last candidate: when your own
+  provider is rate-limited it takes over under your account's monthly budget,
+  and with no provider key at all it is the only path. `ALLUVIA_MANAGED_DISTILL=1`
+  puts it first, `=0` never uses it. Cloud Free includes $5 a month; Pro raises
+  it to $20.
+- **The pause says what would end it.** A rate-limited refresh now tells a
+  signed-out user what one sign-in changes, and a signed-in user whose managed
+  budget is spent what Pro raises it to.
+- **`alluvia cloud status`** shows the plan, managed distillation used and
+  remaining this month, and when memory last synced. `alluvia cloud login`
+  syncs immediately and says what arrived. `alluvia cloud sync` also pushes
+  memory.
+- Signed out, nothing changes: no network, no prompts, and every path above
+  reports "not signed in" instead of failing. Hooks never fail on a sync.
+
 ## 0.8.0 — 2026-09-07
 
 Your memory is yours to move, and the record shows what it did.

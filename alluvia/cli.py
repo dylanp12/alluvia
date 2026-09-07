@@ -305,9 +305,11 @@ def _refresh_plan(repo) -> None:
     typer.echo("(plan only \u2014 no LLM calls were made, nothing was written)")
 
 
-def _echo_refresh_summary(stats: dict, coverage: dict | None = None) -> None:
+def _echo_refresh_summary(stats: dict, coverage: dict | None = None,
+                          signed_in: bool | None = None, over_budget: bool = False) -> None:
     """Per-stage outcome of a refresh — a degraded map must never be
-    indistinguishable from a healthy one."""
+    indistinguishable from a healthy one. A pause also says what would end it:
+    sign in once, or raise the managed budget."""
     d, t = stats.get("distill", {}), stats.get("themes", {})
     if d.get("todo"):
         line = f"distilled: {d.get('ok', 0)}/{d['todo']} sessions"
@@ -326,6 +328,12 @@ def _echo_refresh_summary(stats: dict, coverage: dict | None = None) -> None:
                      if stats.get("retry_at") else "")
             typer.echo(f"⏸ paused: provider rate-limited, {coverage['pending']} pending"
                        f"{retry}; `alluvia refresh` resumes where it stopped")
+            if signed_in is False:
+                typer.echo("  sign in once (`alluvia cloud login`) and refresh falls through to "
+                           "Alluvia Cloud's managed distillation: Free includes $5/month")
+            elif signed_in and over_budget:
+                typer.echo("  your managed budget for this month is spent: Pro raises it to "
+                           "$20/month (`alluvia cloud status`)")
     if t.get("built"):
         typer.echo(f"labels: {t.get('label_cached', 0)} cached · "
                    f"{t.get('label_llm', 0)} fresh · "
@@ -378,6 +386,9 @@ def refresh(
         return
     repo = _repo()
     rep = make_reporter()
+    from alluvia import cloud_memory
+    # signed in: what other machines learned counts as done before we distill
+    pulled = cloud_memory.pull(repo, config.DEFAULT_USER)
     try:
         stats = build_engine(repo, reporter=rep).refresh(config.DEFAULT_USER,
                                                          reporter=rep)
@@ -391,13 +402,47 @@ def refresh(
         rep.close()
         lock.release()
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
+    pushed = cloud_memory.push(repo, config.DEFAULT_USER)
     if isinstance(stats, dict):
         _echo_refresh_summary(stats,
-                              coverage=repo.distill_coverage(config.DEFAULT_USER))
+                              coverage=repo.distill_coverage(config.DEFAULT_USER),
+                              signed_in=_cloud_signed_in(),
+                              over_budget=_managed_cooling(repo))
+    _echo_memory_sync(pulled, pushed)
     from alluvia.hooks import refresh_handoffs
     n_handoffs = refresh_handoffs(repo, config.DEFAULT_USER)
     if n_handoffs:
         typer.echo(f"handoffs: {n_handoffs} repo(s) ready for the next Claude Code session")
+
+
+def _cloud_signed_in() -> bool:
+    from alluvia.cloudclient import load_session
+    sess = load_session()
+    return bool(sess and sess.get("token") and sess.get("url"))
+
+
+def _managed_cooling(repo) -> bool:
+    """The managed gateway answered 429 (budget spent) and is cooling down."""
+    import time as _time
+    from alluvia.llm.client import ManagedLLM
+    return any(r["model"] == ManagedLLM.model and r["cooldown_until"] > _time.time()
+               for r in repo.llm_health_all())
+
+
+def _plural(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _echo_memory_sync(pulled: dict, pushed: dict) -> None:
+    """One line about the cloud, only when signed in; silence otherwise."""
+    if pulled.get("skipped") and pushed.get("skipped"):
+        return
+    if pulled.get("ok") and pushed.get("ok"):
+        typer.echo(f"memory: {_plural(pulled.get('notes_added', 0), 'note')} received · "
+                   f"{_plural(pushed.get('notes', 0), 'note')} sent (Alluvia Cloud)")
+        return
+    err = pulled.get("error") or pushed.get("error") or "unknown error"
+    typer.echo(f"memory sync: {err} (retries on the next refresh)")
 
 
 @app.command()
@@ -982,6 +1027,12 @@ def cloud_sync(yes: bool = typer.Option(False, "--yes", "-y",
             typer.echo(f"sync failed: {e}")
             raise typer.Exit(1)
     typer.echo(f"synced: {result}")
+    from alluvia import cloud_memory
+    mem = cloud_memory.push(_repo(), config.DEFAULT_USER)
+    if mem.get("ok"):
+        typer.echo(f"memory: {_plural(mem.get('notes', 0), 'note')} synced")
+    elif mem.get("error"):
+        typer.echo(f"memory sync: {mem['error']} (retries on the next refresh)")
 
 
 @cloud_app.command("login")
@@ -1001,26 +1052,78 @@ def cloud_login(
         raise typer.Exit(1)
     if token:
         save_session(url, token)
-        typer.echo(f"signed in · {url.rstrip('/')}")
-        return
-    typer.echo("opening your browser to sign in…")
-    try:
-        access, refresh = loopback_login(url, open_browser=not no_browser)
-    except SyncError as e:
-        typer.echo(f"login failed: {e}")
-        raise typer.Exit(1)
-    save_session(url, access, refresh)
+    else:
+        typer.echo("opening your browser to sign in…")
+        try:
+            access, refresh = loopback_login(url, open_browser=not no_browser)
+        except SyncError as e:
+            typer.echo(f"login failed: {e}")
+            raise typer.Exit(1)
+        save_session(url, access, refresh)
     typer.echo(f"signed in · {url.rstrip('/')}")
+    # the one command to remember has been run; from here memory follows you
+    from alluvia import cloud_memory
+    res = cloud_memory.sync(_repo(), config.DEFAULT_USER)
+    if res.get("ok"):
+        pulled, pushed = res.get("pull") or {}, res.get("push") or {}
+        typer.echo(f"memory: {_plural(pulled.get('notes_added', 0), 'note')} received · "
+                   f"{_plural(pushed.get('notes', 0), 'note')} sent")
+        typer.echo("refresh falls through to managed distillation when your provider "
+                   "is limited; memory syncs after every session (alluvia cloud status)")
+    else:
+        err = (res.get("pull") or {}).get("error") or (res.get("push") or {}).get("error")
+        typer.echo(f"memory sync: {err or 'skipped'} (retries on the next refresh)")
+
+
+def _ago(iso: str) -> str:
+    from datetime import datetime, timezone
+    try:
+        secs = (datetime.now(timezone.utc) - datetime.fromisoformat(iso)).total_seconds()
+    except ValueError:
+        return "at an unknown time"
+    if secs < 90:
+        return "just now"
+    if secs < 5400:
+        return f"{int(secs // 60)} min ago"
+    if secs < 172800:
+        return f"{int(secs // 3600)} h ago"
+    return f"{int(secs // 86400)} d ago"
 
 
 @cloud_app.command("status")
 def cloud_status():
-    from alluvia.cloudclient import load_session
-    sess = load_session()
+    """Signed in as what, on which plan, how much managed distillation is left
+    this month, and when memory last synced."""
+    import json as _json
+    from alluvia import cloudclient
+    from alluvia.cloud_memory import LAST_SYNC
+    sess = cloudclient.load_session()
     if not sess:
         typer.echo("not signed in to Alluvia Cloud")
         return
     typer.echo(f"signed in · {sess['url']}")
+    try:
+        b = cloudclient.get_billing(sess["url"], sess["token"])
+    except cloudclient.SyncError as e:
+        typer.echo(f"plan and usage: unavailable ({e})")
+    else:
+        plan = str(b.get("plan") or "free").capitalize()
+        usage = b.get("usage") or {}
+        if usage.get("budget") is not None:
+            typer.echo(f"{plan} · managed distillation ${float(usage.get('spend') or 0):.2f} "
+                       f"of ${float(usage['budget']):.2f} this month")
+        else:
+            typer.echo(f"{plan} · managed distillation not used yet")
+    raw = _repo().get_meta(LAST_SYNC)
+    if raw:
+        try:
+            last = _json.loads(raw)
+            typer.echo(f"memory synced {_plural(int(last.get('notes_pushed', 0)), 'note')} · "
+                       f"{_ago(last.get('at', ''))}")
+            return
+        except (ValueError, TypeError):
+            pass
+    typer.echo("memory: not synced yet (alluvia refresh)")
 
 
 @cloud_app.command("logout")
