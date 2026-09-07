@@ -66,7 +66,12 @@ def _status_of(exc: Exception) -> int | None:
 
 
 def classify_exception(exc: Exception) -> str:
-    """Default classifier: HTTP status is the one universal signal."""
+    """Default classifier: HTTP status is the one universal signal. An adapter
+    that knows its backend is down may declare `cooldown_seconds` on the
+    exception; that is treated as a rate limit with an explicit retry time, so
+    the breaker opens instead of every call failing."""
+    if getattr(exc, "cooldown_seconds", None):
+        return RATE_LIMITED
     code = _status_of(exc)
     if code == 429:
         return RATE_LIMITED
@@ -80,6 +85,12 @@ def classify_exception(exc: Exception) -> str:
 def retry_after_seconds(exc: Exception) -> float | None:
     """Standard `Retry-After` header (RFC 9110) only — seconds or HTTP-date.
     Defensive: any absence or parse failure returns None and the ladder rules."""
+    declared = getattr(exc, "cooldown_seconds", None)
+    if declared is not None:
+        try:
+            return max(0.0, float(declared))
+        except (TypeError, ValueError):
+            pass
     headers = getattr(getattr(exc, "response", None), "headers", None)
     if not headers:
         return None
@@ -210,7 +221,8 @@ class Governor:
                     hint = retry_after_seconds(exc)
                     wait = min(hint if hint is not None else
                                self._rung_wait(st["rung"]), PIN)
-                    if wait <= budget:
+                    declared = getattr(exc, "cooldown_seconds", None) is not None
+                    if not declared and wait <= budget:
                         budget -= wait
                         self._save(model, st)
                         self._wait(model, wait)

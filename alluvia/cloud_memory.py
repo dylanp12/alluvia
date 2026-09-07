@@ -16,6 +16,7 @@ from alluvia.memory_bundle import export_bundle, import_bundle
 PUSHED_AT = "cloud_memory:pushed_at"
 PULLED_AT = "cloud_memory:pulled_at"
 LAST_SYNC = "cloud_memory:last_sync"
+MANAGED_DOWN = "cloud:managed_down"     # JSON {reason, at, until}; empty when healthy
 NOT_SIGNED_IN = {"ok": False, "skipped": "not signed in"}
 
 

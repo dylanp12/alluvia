@@ -281,3 +281,22 @@ def test_governor_exposes_head_model_and_health():
     gov = _gov([("m1", ScriptedAdapter([])), ("m2", ScriptedAdapter([]))], clock)
     assert gov.model == "m1"
     assert [h["model"] for h in gov.health()] == ["m1", "m2"]
+
+
+# --- an adapter that declares its backend down ---------------------------------
+
+class BackendDown(Exception):
+    """No HTTP status at all: the adapter itself knows the service is out."""
+    cooldown_seconds = 900.0
+
+
+def test_declared_cooldown_opens_the_breaker_without_sleeping():
+    clock = FakeClock()
+    a = ScriptedAdapter([BackendDown("upstream refused"), {"ok": True}])
+    gov = _gov([("m1", a)], clock, patience=2000)        # patience would allow a 900 s nap
+    with pytest.raises(LLMUnavailable) as ei:
+        gov.complete_json("s", "u")
+    assert clock.sleeps == []                             # no in-call wait on a declared outage
+    assert a.calls == 1
+    assert ei.value.cooldown_until == clock.t + 900.0     # breaker open for exactly the declared time
+    assert gov.health()[0]["cooldown_until"] == clock.t + 900.0

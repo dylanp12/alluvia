@@ -140,3 +140,19 @@ def test_distill_stops_immediately_when_provider_cold(repo):
     assert repo.distilled_session_ids("local") == set()
     assert stats["distill"]["ok"] == 0 and stats["distill"]["cold"] is True
     assert stats["degraded"] is True
+
+
+def test_distill_failure_lines_are_compact(repo, caplog):
+    """A provider's 2 KB error body must not be dumped to the terminal once per
+    session; the log line carries a readable head of it and the detail stays
+    in the exception."""
+    class Boom:
+        def complete_json(self, *a, **k):
+            raise RuntimeError("Error code: 400 - {'error': {'message': '" + "x" * 1900 + "'}}")
+    _corpus(repo)
+    eng = Engine(repo, ScriptedEmbedder(), Boom(), min_cluster_size=2)
+    with caplog.at_level("WARNING", logger="alluvia.engine.engine"):
+        eng.refresh("local")
+    lines = [r.getMessage() for r in caplog.records if "distill failed" in r.getMessage()]
+    assert lines, "the failures must still be reported"
+    assert all(len(line) < 320 for line in lines), max(len(line) for line in lines)

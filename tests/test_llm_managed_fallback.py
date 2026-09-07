@@ -134,3 +134,87 @@ def test_pause_text_names_pro_when_the_managed_budget_is_spent(capsys):
     assert "Pro" in out and "alluvia cloud status" in out
     cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, over_budget=False)
     assert "cloud login" not in capsys.readouterr().out
+
+
+class _GatewayError(Exception):
+    def __init__(self, code, body):
+        super().__init__(f"Error code: {code} - {body}")
+        self.status_code = code
+
+
+LITELLM_400 = ("{'error': {'message': 'litellm.BadRequestError: AnthropicException - "
+               '{"type":"error","error":{"type":"invalid_request_error","message":"Your credit '
+               'balance is too low to access the Anthropic API. Please go to Plans & Billing to '
+               'upgrade or purchase credits."},"request_id":"req_011"}. Received Model '
+               "Group=alluvia-distill\\nAvailable Model Group Fallbacks=None', 'type': None, "
+               "'param': None, 'code': '400'}}")
+
+
+def _managed_with(monkeypatch, exc):
+    from alluvia.llm import client as clientmod
+
+    class Inner:
+        def __init__(self, *a, **k):
+            pass
+
+        def complete_json(self, system, user):
+            if exc is not None:
+                raise exc
+            return {"notes": []}
+    monkeypatch.setattr(clientmod, "OpenAICompatLLM", Inner)
+    clientmod.reset_managed_status()
+    return ManagedLLM(session_loader=lambda: SESSION, key_fetcher=lambda u, t: KEY)
+
+
+def test_service_side_failure_cools_the_managed_candidate_with_a_readable_reason(monkeypatch):
+    """A 400 from the gateway's upstream (no credits) is Alluvia's problem, not
+    the user's: the candidate cools down instead of failing every session, and
+    the reason is one readable sentence, never the raw provider JSON."""
+    from alluvia.llm import client as clientmod
+    from alluvia.llm.governor import RATE_LIMITED, retry_after_seconds
+    llm = _managed_with(monkeypatch, _GatewayError(400, LITELLM_400))
+    try:
+        llm.complete_json("s", "u")
+    except clientmod.ManagedServiceDown as e:
+        assert classify_exception(e) == RATE_LIMITED           # opens the breaker
+        assert retry_after_seconds(e) == clientmod.MANAGED_COOLDOWN == 900
+        assert "credit balance is too low" in str(e) and "{" not in str(e)
+        assert len(str(e)) < 220
+    else:
+        raise AssertionError("expected ManagedServiceDown")
+    st = clientmod.managed_status()
+    assert st["state"] == "down" and "credit balance" in st["reason"]
+
+
+def test_budget_429_passes_through_and_auth_becomes_key_unavailable(monkeypatch):
+    from alluvia.llm import client as clientmod
+    llm = _managed_with(monkeypatch, _GatewayError(429, "budget exceeded"))
+    try:
+        llm.complete_json("s", "u")
+    except _GatewayError as e:
+        assert e.status_code == 429                            # the Governor's job
+    assert clientmod.managed_status()["state"] == "budget"
+    llm = _managed_with(monkeypatch, _GatewayError(401, "invalid virtual key"))
+    try:
+        llm.complete_json("s", "u")
+    except ManagedKeyUnavailable:
+        pass
+    else:
+        raise AssertionError("expected ManagedKeyUnavailable")
+
+
+def test_success_marks_managed_ok(monkeypatch):
+    from alluvia.llm import client as clientmod
+    llm = _managed_with(monkeypatch, None)
+    assert llm.complete_json("s", "u") == {"notes": []}
+    assert clientmod.managed_status()["state"] == "ok"
+
+
+def test_pause_text_names_a_managed_outage_as_ours(capsys):
+    import alluvia.cli as cli
+    stats, cov = _paused()
+    cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, over_budget=False,
+                              managed_down="upstream: your credit balance is too low")
+    out = capsys.readouterr().out
+    assert "managed distillation is unavailable" in out and "credit balance" in out
+    assert "$5/month" not in out

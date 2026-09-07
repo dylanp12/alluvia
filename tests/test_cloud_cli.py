@@ -99,3 +99,17 @@ def test_sync_also_pushes_memory(tmp_path, monkeypatch):
     r = runner.invoke(cli.app, ["cloud", "sync", "--yes"])
     assert r.exit_code == 0, r.output
     assert "memory: 4 notes" in r.output
+
+
+def test_status_reports_a_managed_outage(tmp_path, monkeypatch):
+    import json
+    from alluvia import cloudclient
+    from alluvia.cloud_memory import MANAGED_DOWN
+    _seed(monkeypatch, tmp_path)
+    monkeypatch.setattr(cloudclient, "get_billing", lambda url, tok: {
+        "plan": "free", "status": None, "usage": {"spend": 0.0, "budget": 5.0}})
+    cli._repo().set_meta(MANAGED_DOWN, json.dumps({
+        "reason": "upstream: your credit balance is too low", "at": "2026-09-08T03:26:00+00:00",
+        "until": "2026-09-08T03:41:00+00:00"}))
+    out = runner.invoke(cli.app, ["cloud", "status"]).output
+    assert "managed distillation: unavailable" in out and "credit balance" in out

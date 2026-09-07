@@ -100,6 +100,49 @@ def _default_health():
     return _process_health
 
 
+MANAGED_COOLDOWN = 900.0   # seconds the managed candidate rests after a service-side failure
+
+_managed_status: dict = {"state": "unknown", "reason": None, "at": None}
+
+
+def managed_status() -> dict:
+    """What the managed candidate last reported in this process:
+    unknown | ok | budget (429 at the gateway) | down (our side failed)."""
+    return dict(_managed_status)
+
+
+def reset_managed_status() -> None:
+    _managed_status.update(state="unknown", reason=None, at=None)
+
+
+def _set_managed(state: str, reason: str | None = None) -> None:
+    import time
+    _managed_status.update(state=state, reason=reason, at=time.time())
+
+
+def _compact_reason(exc: Exception) -> str:
+    """One readable sentence from a provider error body, never the raw JSON."""
+    text = str(exc)
+    msgs = re.findall(r'"message"\s*:\s*"([^"]{8,})"', text)
+    core = msgs[-1] if msgs else text
+    core = re.sub(r"[{}\[\]]", " ", core)
+    core = re.sub(r"\s+", " ", core).strip()
+    if len(core) > 150:
+        core = core[:147] + "..."
+    return "upstream provider refused: " + core
+
+
+class ManagedServiceDown(Exception):
+    """Alluvia's side failed (upstream credits, a 5xx, an unreachable gateway).
+    Carries `cooldown_seconds` so the Governor opens the breaker instead of
+    failing every remaining session, and a reason a person can read."""
+
+    def __init__(self, reason: str, cooldown_seconds: float = MANAGED_COOLDOWN):
+        super().__init__(f"managed distillation is unavailable right now ({reason})")
+        self.reason = reason
+        self.cooldown_seconds = cooldown_seconds
+
+
 class ManagedKeyUnavailable(Exception):
     """The account's managed key could not be fetched (signed out, offline, or
     the service refused). Classified like a 401 so the Governor treats it as
@@ -135,7 +178,28 @@ class ManagedLLM:
         return self._inner
 
     def complete_json(self, system: str, user: str) -> Any:
-        return self._inner_().complete_json(system, user)
+        from alluvia.llm.governor import _status_of
+        try:
+            inner = self._inner_()
+        except ManagedKeyUnavailable as e:
+            _set_managed("down", str(e))
+            raise
+        try:
+            out = inner.complete_json(system, user)
+        except Exception as exc:                      # noqa: BLE001 — classified below
+            code = _status_of(exc)
+            if code == 429:                           # budget or pacing: the Governor's job
+                _set_managed("budget", "the monthly managed budget is spent or the gateway is pacing")
+                raise
+            if code in (401, 403):
+                _set_managed("down", "the account key was refused")
+                raise ManagedKeyUnavailable(
+                    "managed distillation: the account key was refused (alluvia cloud login)") from exc
+            reason = _compact_reason(exc)
+            _set_managed("down", reason)
+            raise ManagedServiceDown(reason) from exc
+        _set_managed("ok")
+        return out
 
 
 def _signed_in(session_loader) -> bool:

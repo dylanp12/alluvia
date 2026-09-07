@@ -61,6 +61,13 @@ def _heuristic_status(theme: Theme, now: datetime) -> str:
     return "open"
 
 
+def _short(e: Exception, n: int = 240) -> str:
+    """A provider error body can be kilobytes; the log line gets a readable head."""
+    import re as _re
+    text = _re.sub(r"\s+", " ", str(e)).strip()
+    return text if len(text) <= n else text[:n - 3] + "..."
+
+
 class Engine:
     def __init__(self, repo: Repo, embedder: Embedder, llm: LLM,
                  min_cluster_size: int | None = None):
@@ -187,7 +194,7 @@ class Engine:
                 consecutive += 1
                 d["failed"] += 1
                 log.warning("distill failed for %s (%s) [%d consecutive]",
-                            s.id, e, consecutive)
+                            s.id, _short(e), consecutive)
                 if consecutive >= self.MAX_CONSECUTIVE_FAILURES:
                     log.warning("aborting distill after %d consecutive failures; "
                                 "%d/%d sessions done — re-run refresh to resume",

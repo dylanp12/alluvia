@@ -306,7 +306,8 @@ def _refresh_plan(repo) -> None:
 
 
 def _echo_refresh_summary(stats: dict, coverage: dict | None = None,
-                          signed_in: bool | None = None, over_budget: bool = False) -> None:
+                          signed_in: bool | None = None, over_budget: bool = False,
+                          managed_down: str | None = None) -> None:
     """Per-stage outcome of a refresh — a degraded map must never be
     indistinguishable from a healthy one. A pause also says what would end it:
     sign in once, or raise the managed budget."""
@@ -328,7 +329,11 @@ def _echo_refresh_summary(stats: dict, coverage: dict | None = None,
                      if stats.get("retry_at") else "")
             typer.echo(f"⏸ paused: provider rate-limited, {coverage['pending']} pending"
                        f"{retry}; `alluvia refresh` resumes where it stopped")
-            if signed_in is False:
+            if managed_down:
+                typer.echo(f"  Alluvia Cloud's managed distillation is unavailable right now "
+                           f"({managed_down}). This is on our side, not yours; your own provider "
+                           f"is still tried first and the managed path retries after its cooldown")
+            elif signed_in is False:
                 typer.echo("  sign in once (`alluvia cloud login`) and refresh falls through to "
                            "Alluvia Cloud's managed distillation: Free includes $5/month")
             elif signed_in and over_budget:
@@ -403,16 +408,37 @@ def refresh(
         lock.release()
     typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
     pushed = cloud_memory.push(repo, config.DEFAULT_USER)
+    managed_down = _record_managed_state(repo)
     if isinstance(stats, dict):
         _echo_refresh_summary(stats,
                               coverage=repo.distill_coverage(config.DEFAULT_USER),
                               signed_in=_cloud_signed_in(),
-                              over_budget=_managed_cooling(repo))
+                              over_budget=_managed_cooling(repo),
+                              managed_down=managed_down)
     _echo_memory_sync(pulled, pushed)
     from alluvia.hooks import refresh_handoffs
     n_handoffs = refresh_handoffs(repo, config.DEFAULT_USER)
     if n_handoffs:
         typer.echo(f"handoffs: {n_handoffs} repo(s) ready for the next Claude Code session")
+
+
+def _record_managed_state(repo) -> str | None:
+    """Persist what the managed candidate reported this run so `cloud status`
+    can show it later; returns the outage reason when it is down."""
+    import json as _json
+    from datetime import datetime, timedelta, timezone
+    from alluvia.cloud_memory import MANAGED_DOWN
+    from alluvia.llm.client import MANAGED_COOLDOWN, managed_status
+    ms = managed_status()
+    if ms["state"] == "down":
+        now = datetime.now(timezone.utc)
+        repo.set_meta(MANAGED_DOWN, _json.dumps({
+            "reason": ms["reason"], "at": now.isoformat(),
+            "until": (now + timedelta(seconds=MANAGED_COOLDOWN)).isoformat()}))
+        return ms["reason"]
+    if ms["state"] == "ok":
+        repo.set_meta(MANAGED_DOWN, "")
+    return None
 
 
 def _cloud_signed_in() -> bool:
@@ -1096,7 +1122,7 @@ def cloud_status():
     this month, and when memory last synced."""
     import json as _json
     from alluvia import cloudclient
-    from alluvia.cloud_memory import LAST_SYNC
+    from alluvia.cloud_memory import LAST_SYNC, MANAGED_DOWN
     sess = cloudclient.load_session()
     if not sess:
         typer.echo("not signed in to Alluvia Cloud")
@@ -1114,7 +1140,17 @@ def cloud_status():
                        f"of ${float(usage['budget']):.2f} this month")
         else:
             typer.echo(f"{plan} · managed distillation not used yet")
-    raw = _repo().get_meta(LAST_SYNC)
+    repo = _repo()
+    down = repo.get_meta(MANAGED_DOWN)
+    if down:
+        try:
+            d = _json.loads(down)
+            typer.echo(f"managed distillation: unavailable ({d.get('reason')}) since "
+                       f"{str(d.get('at', ''))[11:16]} UTC; retries after "
+                       f"{str(d.get('until', ''))[11:16]} UTC. This is on our side, not yours")
+        except (ValueError, TypeError):
+            pass
+    raw = repo.get_meta(LAST_SYNC)
     if raw:
         try:
             last = _json.loads(raw)

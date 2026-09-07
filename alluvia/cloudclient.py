@@ -146,6 +146,7 @@ def loopback_login(server_url: str, open_browser: bool = True,
     login_url = f"{server_url.rstrip('/')}/cli/login?port={port}&state={nonce}"
     if open_browser:
         webbrowser.open(login_url)
+        print(f"if the browser did not open, paste this link:\n  {login_url}")
     else:
         print(f"open this URL to sign in:\n  {login_url}")
     srv.timeout = 1.0

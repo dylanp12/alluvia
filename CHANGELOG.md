@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.9.1 — 2026-09-08
+
+Found on the first real sign-in: when Alluvia's own managed gateway failed, the
+pause blamed your provider. Now it says whose fault it is.
+
+- **An outage on our side is named as ours.** When the managed gateway fails
+  for a reason that is not your budget (its upstream refused, a server error,
+  unreachable), the managed candidate rests for fifteen minutes instead of
+  failing every remaining session, the pause text says "managed distillation is
+  unavailable right now" with one readable sentence of reason, and
+  `alluvia cloud status` shows the outage and when it retries. Your own
+  provider is still tried first.
+- **The sign-in link is always printed.** `alluvia cloud login` opens the
+  browser and also prints the link to paste, for SSH sessions and browsers that
+  do not open.
+- **Failure lines are readable.** A provider's multi-kilobyte error body is no
+  longer dumped to the terminal once per session; the log line carries its
+  head, the detail stays in the exception.
+- Adapters can declare a cooldown on an exception; the Governor opens the
+  breaker for exactly that long instead of sleeping through it.
+
 ## 0.9.0 — 2026-09-07
 
 One thing to remember: `alluvia cloud login`. Then memory follows you, and a

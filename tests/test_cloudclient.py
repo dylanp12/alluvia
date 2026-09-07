@@ -77,3 +77,20 @@ def test_http_error_carries_its_status(monkeypatch):
         assert e.code == 401
     else:
         raise AssertionError("expected SyncError")
+
+
+def test_login_always_prints_a_link_to_paste(monkeypatch, capsys):
+    """The browser may not open (SSH, a locked-down desktop); the link is
+    always printed so the user can paste it."""
+    from alluvia import cloudclient
+    monkeypatch.setattr(cloudclient, "webbrowser", type("W", (), {"open": staticmethod(lambda u: True)})(),
+                        raising=False)
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open", lambda u: True)
+    try:
+        cloudclient.loopback_login("https://app.example.com", open_browser=True, timeout=0.05)
+    except cloudclient.SyncError:
+        pass
+    out = capsys.readouterr().out
+    assert "https://app.example.com/cli/login?port=" in out
+    assert "paste" in out.lower()
