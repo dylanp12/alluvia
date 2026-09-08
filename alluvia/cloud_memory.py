@@ -37,20 +37,42 @@ def _authed(session: dict, call):
         return call(token)
 
 
-def push(repo, user_id: str, client=None, session=None) -> dict:
+def _backlog(repo, user_id: str) -> int:
+    try:
+        from alluvia.engine.engine import pending_distill
+        return len(pending_distill(repo, user_id))
+    except Exception:                                # noqa: BLE001 — a count, never a failure
+        return 0
+
+
+def push(repo, user_id: str, client=None, session=None, send_derived: bool = True) -> dict:
+    """Two payloads: the memory bundle (source of truth for briefings, forget,
+    and cross-machine memory) and the derived record (topics, related work,
+    suggestions; never raw) so the app fills in by itself."""
     client = client or cloudclient
     session = session if session is not None else cloudclient.load_session()
     if not session or not session.get("token") or not session.get("url"):
         return dict(NOT_SIGNED_IN)
-    records = list(export_bundle(repo, user_id))
+    records = list(export_bundle(repo, user_id, extra={"pending_sessions": _backlog(repo, user_id)}))
     try:
         result = _authed(session, lambda tok: client.post_memory(session["url"], tok, records))
     except cloudclient.SyncError as e:
         return {"ok": False, "error": str(e)}
     repo.set_meta(PUSHED_AT, _now())
+    derived = {"ok": False, "skipped": "not requested"}
+    if send_derived:
+        try:
+            from alluvia.cloudsync.bundle import build_bundle
+            from alluvia.cloudsync.policy import load_policy
+            bundle = build_bundle(repo, user_id, load_policy())
+            _authed(session, lambda tok: client.push_bundle(session["url"], tok, bundle))
+            derived = {"ok": True, "notes": len(bundle["notes"]), "themes": len(bundle["themes"])}
+        except Exception as e:                       # noqa: BLE001 — never fail a push on the second payload
+            derived = {"ok": False, "error": str(e)}
     notes = sum(1 for r in records if r.get("kind") == "note")
     return {"ok": True, "pushed": len(records), "notes": notes,
-            "upserted": result.get("upserted") if isinstance(result, dict) else None}
+            "upserted": result.get("upserted") if isinstance(result, dict) else None,
+            "derived": derived}
 
 
 def pull(repo, user_id: str, client=None, session=None, embedder=None) -> dict:
@@ -78,6 +100,11 @@ def sync(repo, user_id: str, client=None, session=None, embedder=None) -> dict:
     pulled = pull(repo, user_id, client=client, session=session, embedder=embedder)
     pushed = push(repo, user_id, client=client, session=session)
     ok = bool(pulled.get("ok") and pushed.get("ok"))
+    try:                                             # the plan shapes the LLM chain and the pause text
+        b = _authed(session, lambda tok: (client or cloudclient).get_billing(session["url"], tok))
+        cloudclient.update_session(plan=str(b.get("plan") or "free"))
+    except Exception:                                # noqa: BLE001
+        pass
     if ok:
         repo.set_meta(LAST_SYNC, json.dumps({
             "at": _now(), "notes_pushed": pushed.get("notes", 0),

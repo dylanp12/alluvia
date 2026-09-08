@@ -19,6 +19,7 @@ def _no_real_cloud_session(tmp_path, monkeypatch):
     every cloud path is the honest 'not signed in' result and never touches the
     network. Tests that need a session set ALLUVIA_CLOUD_SESSION themselves."""
     monkeypatch.setenv("ALLUVIA_CLOUD_SESSION", str(tmp_path / "no-cloud-session.json"))
+    monkeypatch.setenv("ALLUVIA_CLOUD_CONFIG", str(tmp_path / "no-cloud.toml"))
 
 
 @pytest.fixture

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 0.9.3 — 2026-09-08
+
+- **One briefing, two readers.** The session-start briefing is now a structure
+  the text is rendered from, so the app can show it as sections that link to
+  sessions while the plugin injects the identical text.
+- **The push carries the whole derived record.** After the memory bundle, the
+  same push sends topics, related work, and suggestions (never raw) so the app
+  fills in by itself, plus the number of sessions still waiting on this machine.
+- **Processing is a Pro feature.** Free accounts bring their own key; the pause
+  says how many sessions are waiting and that Pro processes them with no key.
+
 ## 0.9.2 — 2026-09-08
 
 - **An unforget reaches every machine.** A suppression retracted elsewhere

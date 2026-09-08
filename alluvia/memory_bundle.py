@@ -26,14 +26,24 @@ def _dt(s):
     return datetime.fromisoformat(s) if s else None
 
 
+def _version() -> str:
+    from importlib.metadata import PackageNotFoundError, version
+    try:
+        return version("alluvia")
+    except PackageNotFoundError:
+        return "dev"
+
+
 def export_bundle(repo, user_id: str, project: str | None = None,
-                  project_relative: bool = False):
+                  project_relative: bool = False, extra: dict | None = None):
     """Yield bundle records. `project` limits to one repository's sessions;
     `project_relative` writes them as belonging to "this checkout" so the
-    importer binds them to its own root."""
+    importer binds them to its own root; `extra` adds header fields (the cloud
+    reads the backlog from them)."""
     yield {"kind": "header", "format": FORMAT, "version": VERSION,
            "exported_at": datetime.now(timezone.utc).isoformat(),
-           "origin": socket.gethostname(), "pipeline_version": PIPELINE_VERSION}
+           "origin": socket.gethostname(), "pipeline_version": PIPELINE_VERSION,
+           "cli_version": _version(), **(extra or {})}
     sessions = repo.list_session_meta(user_id, project=project)
     sids = {s["id"] for s in sessions}
     for s in sessions:

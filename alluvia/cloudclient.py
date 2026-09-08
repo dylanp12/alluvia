@@ -25,6 +25,18 @@ def save_session(url: str, token: str, refresh: str | None = None) -> None:
     os.chmod(p, 0o600)
 
 
+def update_session(**fields) -> None:
+    """Keep extra facts (the plan) next to the token, without touching it."""
+    sess = load_session()
+    if not sess:
+        return
+    sess.update({k: v for k, v in fields.items() if v is not None})
+    p = session_path()
+    with open(p, "w") as f:
+        json.dump(sess, f)
+    os.chmod(p, 0o600)
+
+
 def load_session() -> dict | None:
     try:
         with open(session_path()) as f:

@@ -105,3 +105,18 @@ def test_footer_counts_sessions_grammatically(repo):
     repo.mark_distilled("local", "claude-code:solo")
     assert "1 session in this repo" in build_project_handoff(repo, "local", "/work/solo", now=T1)
     assert "2 sessions in this repo" in build_project_handoff(repo, "local", "/work/acme", now=T1)
+
+
+def test_structure_and_text_are_one_thing(repo):
+    """The app renders the structure; the plugin injects the text. They must
+    never disagree, so the text is rendered from the structure."""
+    from alluvia.handoff import build_project_handoff_struct, build_project_handoff_with_ids, render_handoff
+    _seed(repo)
+    s = build_project_handoff_struct(repo, "local", "/work/acme")
+    assert s["project"] == "acme" and s["head"].startswith("last session")
+    assert [i["note_kind"] for i in s["last"]][:1] == ["decision"]
+    assert all(i["session_native"] for i in s["last"] + s["earlier"])
+    assert s["open"] and s["open"][0]["label"] == "Auth token lifecycle"
+    assert s["footer"][0].endswith("in this repo")
+    assert render_handoff(s) == build_project_handoff(repo, "local", "/work/acme")
+    assert s["shown"] == build_project_handoff_with_ids(repo, "local", "/work/acme")[1]

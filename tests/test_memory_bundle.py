@@ -104,3 +104,11 @@ def test_a_retracted_suppression_unsuppresses_locally(repo):
     assert out["judgments_added"] == 1 and out["skipped"] == 0
     import_bundle(repo, "local", [{"kind": "suppressed", "note_id": "n:wrong", "reason": "wrong again"}])
     assert "n:wrong" in repo.suppressed_note_ids("local")
+
+
+def test_header_carries_backlog_and_version(repo):
+    """The app's backlog trigger needs to know how many sessions wait on this
+    machine; the header is the only place a push says so."""
+    _seed(repo)
+    head = next(export_bundle(repo, "local", extra={"pending_sessions": 1}))
+    assert head["kind"] == "header" and head["pending_sessions"] == 1 and head["cli_version"]

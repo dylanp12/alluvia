@@ -123,7 +123,7 @@ def test_pause_text_tells_the_signed_out_user_what_sign_in_changes(capsys):
     stats, cov = _paused()
     cli._echo_refresh_summary(stats, coverage=cov, signed_in=False)
     out = capsys.readouterr().out
-    assert "alluvia cloud login" in out and "$5/month" in out
+    assert "alluvia cloud login" in out and "Pro" in out
 
 
 def test_pause_text_names_pro_when_the_managed_budget_is_spent(capsys):
@@ -131,7 +131,7 @@ def test_pause_text_names_pro_when_the_managed_budget_is_spent(capsys):
     stats, cov = _paused()
     cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, over_budget=True)
     out = capsys.readouterr().out
-    assert "Pro" in out and "alluvia cloud status" in out
+    assert "1,000 sessions this month" in out
     cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, over_budget=False)
     assert "cloud login" not in capsys.readouterr().out
 
@@ -218,3 +218,24 @@ def test_pause_text_names_a_managed_outage_as_ours(capsys):
     out = capsys.readouterr().out
     assert "managed distillation is unavailable" in out and "credit balance" in out
     assert "$5/month" not in out
+
+
+def test_free_plan_never_adds_the_managed_candidate(monkeypatch, tmp_path):
+    """Free is bring-your-own-key; the managed gateway is Pro. No wasted call."""
+    _env(monkeypatch, tmp_path)
+    llm = make_llm("distill", session_loader=lambda: {**SESSION, "plan": "free"})
+    assert "alluvia-cloud" not in _models(llm)
+    llm = make_llm("distill", session_loader=lambda: {**SESSION, "plan": "pro"}, key_fetcher=lambda u, t: KEY)
+    assert _models(llm)[-1] == "alluvia-cloud"
+
+
+def test_pause_text_sells_pro_to_a_free_backlog(capsys):
+    import alluvia.cli as cli
+    stats, cov = _paused()
+    cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, plan="free")
+    out = capsys.readouterr().out
+    assert "3 sessions are waiting" in out and "Pro processes them now" in out and "no API key" in out
+    cli._echo_refresh_summary(stats, coverage=cov, signed_in=True, plan="pro", over_budget=True)
+    assert "1,000 sessions this month" in capsys.readouterr().out
+    cli._echo_refresh_summary(stats, coverage=cov, signed_in=False)
+    assert "alluvia cloud login" in capsys.readouterr().out

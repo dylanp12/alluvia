@@ -202,10 +202,14 @@ class ManagedLLM:
         return out
 
 
-def _signed_in(session_loader) -> bool:
+def _plan_allows_managed(session_loader) -> bool:
+    """Signed in, and on a plan that includes processing (Pro, Team). An
+    unknown plan is tried once; the key call answers. Free never calls."""
     from alluvia import cloudclient
-    sess = (session_loader or cloudclient.load_session)()
-    return bool(sess and sess.get("token") and sess.get("url"))
+    sess = (session_loader or cloudclient.load_session)() or {}
+    if not sess.get("token") or not sess.get("url"):
+        return False
+    return sess.get("plan") in (None, "pro", "team")
 
 
 def make_llm(role: str | None = None, health=None, on_wait=None,
@@ -215,10 +219,10 @@ def make_llm(role: str | None = None, health=None, on_wait=None,
     Governor (backoff, per-model breakers, chain fallthrough — see
     llm/governor.py). Roles: distill, label, status, why, propose.
 
-    Distill only, once signed in to Alluvia Cloud: the managed gateway joins the
-    chain — last by default, first when ALLUVIA_MANAGED_DISTILL=1, alone when no
-    provider key is configured, never when =0. A refresh does not stall on one
-    rate-limited provider."""
+    Distill only, signed in to Alluvia Cloud on a plan that includes processing:
+    the managed gateway joins the chain — last by default, first when
+    ALLUVIA_MANAGED_DISTILL=1, alone when no provider key is configured, never
+    when =0. A refresh does not stall on one rate-limited provider."""
     from alluvia.llm.governor import Governor
     provider = config.llm_provider()
     if provider not in ("anthropic", "openai", "groq"):
@@ -227,7 +231,7 @@ def make_llm(role: str | None = None, health=None, on_wait=None,
     candidates = [(m, _adapter(provider, m, key))
                   for m in config.llm_chain(provider, role)]
     pref = config.managed_distillation() if role == "distill" else False
-    if pref is not False and _signed_in(session_loader):
+    if pref is not False and _plan_allows_managed(session_loader):
         managed = (ManagedLLM.model, ManagedLLM(session_loader, key_fetcher))
         if pref is True:
             candidates = [managed] + candidates

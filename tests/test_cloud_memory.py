@@ -110,3 +110,23 @@ def test_expired_token_is_refreshed_once(repo, monkeypatch, tmp_path):
     out = push(repo, USER, client=cloud)                     # session read from disk
     assert out["ok"] and [c[2] for c in cloud.calls] == ["old", "new"]
     assert cloudclient.load_session()["token"] == "new"
+
+
+def test_push_sends_the_derived_record_too_and_learns_the_plan(repo, monkeypatch, tmp_path):
+    """One push, two payloads: the memory bundle (source of truth) and the
+    derived record (topics, related work, suggestions) so the app fills in by
+    itself. The plan is cached for the LLM chain and the pause text."""
+    _seed(repo)
+    cloud = FakeCloud()
+    cloud.bundles = []
+    cloud.get_billing = lambda url, tok: {"plan": "pro", "status": "active", "usage": None}
+    cloud.push_bundle = lambda url, tok, b: cloud.bundles.append(b) or {"notes": len(b["notes"])}
+    monkeypatch.setenv("ALLUVIA_CLOUD_SESSION", str(tmp_path / "sess.json"))
+    from alluvia import cloudclient
+    cloudclient.save_session("https://api.example.com", "tok")
+    out = sync(repo, USER, client=cloud)
+    assert out["ok"] and out["push"]["derived"]["ok"] and cloud.bundles[0]["notes"]
+    assert cloud.calls[0][0] == "get"                                  # memory pull first
+    assert cloudclient.load_session()["plan"] == "pro"
+    header = cloud.calls[-1][3][0]
+    assert header["kind"] == "header" and "pending_sessions" in header

@@ -307,7 +307,7 @@ def _refresh_plan(repo) -> None:
 
 def _echo_refresh_summary(stats: dict, coverage: dict | None = None,
                           signed_in: bool | None = None, over_budget: bool = False,
-                          managed_down: str | None = None) -> None:
+                          managed_down: str | None = None, plan: str | None = None) -> None:
     """Per-stage outcome of a refresh — a degraded map must never be
     indistinguishable from a healthy one. A pause also says what would end it:
     sign in once, or raise the managed budget."""
@@ -333,12 +333,16 @@ def _echo_refresh_summary(stats: dict, coverage: dict | None = None,
                 typer.echo(f"  Alluvia Cloud's managed distillation is unavailable right now "
                            f"({managed_down}). This is on our side, not yours; your own provider "
                            f"is still tried first and the managed path retries after its cooldown")
-            elif signed_in is False:
-                typer.echo("  sign in once (`alluvia cloud login`) and refresh falls through to "
-                           "Alluvia Cloud's managed distillation: Free includes $5/month")
+            elif signed_in and plan == "free":
+                typer.echo(f"  {coverage['pending']} sessions are waiting to be processed. Pro processes "
+                           f"them now, no API key needed: upgrade in Account at the app "
+                           f"(alluvia cloud status)")
             elif signed_in and over_budget:
-                typer.echo("  your managed budget for this month is spent: Pro raises it to "
-                           "$20/month (`alluvia cloud status`)")
+                typer.echo("  your 1,000 sessions this month are used up: more next month, or raise "
+                           "it in Account at the app")
+            elif signed_in is False:
+                typer.echo("  Pro processes these for you, no API key needed: sign in once "
+                           "(`alluvia cloud login`), then upgrade in Account")
     if t.get("built"):
         typer.echo(f"labels: {t.get('label_cached', 0)} cached · "
                    f"{t.get('label_llm', 0)} fresh · "
@@ -414,7 +418,8 @@ def refresh(
                               coverage=repo.distill_coverage(config.DEFAULT_USER),
                               signed_in=_cloud_signed_in(),
                               over_budget=_managed_cooling(repo),
-                              managed_down=managed_down)
+                              managed_down=managed_down,
+                              plan=(_cloud_session() or {}).get("plan"))
     _echo_memory_sync(pulled, pushed)
     from alluvia.hooks import refresh_handoffs
     n_handoffs = refresh_handoffs(repo, config.DEFAULT_USER)
@@ -439,6 +444,11 @@ def _record_managed_state(repo) -> str | None:
     if ms["state"] == "ok":
         repo.set_meta(MANAGED_DOWN, "")
     return None
+
+
+def _cloud_session() -> dict | None:
+    from alluvia.cloudclient import load_session
+    return load_session()
 
 
 def _cloud_signed_in() -> bool:
@@ -1133,6 +1143,7 @@ def cloud_status():
     except cloudclient.SyncError as e:
         typer.echo(f"plan and usage: unavailable ({e})")
     else:
+        cloudclient.update_session(plan=str(b.get("plan") or "free"))
         plan = str(b.get("plan") or "free").capitalize()
         usage = b.get("usage") or {}
         if usage.get("budget") is not None:
