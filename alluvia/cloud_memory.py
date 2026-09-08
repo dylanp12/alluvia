@@ -37,6 +37,15 @@ def _authed(session: dict, call):
         return call(token)
 
 
+def _limit_of(e: Exception) -> str:
+    text = str(e)
+    try:
+        body = json.loads(text[text.index("{"):])
+        return str(body.get("limit") or "plan")
+    except (ValueError, AttributeError):
+        return "plan"
+
+
 def _backlog(repo, user_id: str) -> int:
     try:
         from alluvia.engine.engine import pending_distill
@@ -57,7 +66,10 @@ def push(repo, user_id: str, client=None, session=None, send_derived: bool = Tru
     try:
         result = _authed(session, lambda tok: client.post_memory(session["url"], tok, records))
     except cloudclient.SyncError as e:
-        return {"ok": False, "error": str(e)}
+        out = {"ok": False, "error": str(e)}
+        if e.code == 402:                            # the plan said no; say which limit
+            out["limit"] = _limit_of(e)
+        return out
     repo.set_meta(PUSHED_AT, _now())
     derived = {"ok": False, "skipped": "not requested"}
     if send_derived:

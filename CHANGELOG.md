@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.4 — 2026-09-08
+
+- **The plan's limits are said plainly.** When the cloud refuses a second
+  machine on Free, the CLI says so in one line and nothing else changes on
+  this machine.
+
 ## 0.9.3 — 2026-09-08
 
 - **One briefing, two readers.** The session-start briefing is now a structure

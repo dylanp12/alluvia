@@ -130,3 +130,12 @@ def test_push_sends_the_derived_record_too_and_learns_the_plan(repo, monkeypatch
     assert cloudclient.load_session()["plan"] == "pro"
     header = cloud.calls[-1][3][0]
     assert header["kind"] == "header" and "pending_sessions" in header
+
+
+def test_a_plan_limit_is_a_result_the_user_can_read(repo):
+    """Free syncs one machine. The second is told why, once, and nothing raises."""
+    _seed(repo)
+    cloud = FakeCloud(fail=SyncError('server returned 402: {"error": "plan_limit", "limit": "machines", "device": "desk"}',
+                                     code=402))
+    out = push(repo, USER, client=cloud, session=SESSION)
+    assert out["ok"] is False and out["limit"] == "machines"

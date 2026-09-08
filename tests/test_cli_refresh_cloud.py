@@ -56,3 +56,17 @@ def test_signed_out_pause_names_the_way_out(tmp_path, monkeypatch):
     assert r.exit_code == 0, r.output
     assert "paused" in r.output and "alluvia cloud login" in r.output
     assert "memory" not in r.output.lower()          # signed out: nothing about sync
+
+
+def test_refresh_says_free_is_one_machine(tmp_path, monkeypatch):
+    from alluvia import cloud_memory
+    _signed_in(tmp_path, monkeypatch)
+    monkeypatch.setattr(cloud_memory, "pull", lambda repo, user, **kw: {"ok": True, "received": 0, "notes_added": 0})
+    monkeypatch.setattr(cloud_memory, "push", lambda repo, user, **kw: {"ok": False, "limit": "machines",
+                                                                       "error": "server returned 402"})
+    build = _engine_factory(FakeLLM(DISTILL + [{"label": "Auth", "summary": "a"}, {"label": "Deploy", "summary": "d"}]))
+    monkeypatch.setattr(cli, "build_engine", build)
+    runner.invoke(cli.app, ["ingest", "--source", "claude-code", "--path", str(_seed_logs(tmp_path))])
+    r = runner.invoke(cli.app, ["refresh"])
+    assert r.exit_code == 0, r.output
+    assert "Free syncs one machine" in r.output and "Pro syncs all of them" in r.output

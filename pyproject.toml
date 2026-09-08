@@ -1,6 +1,6 @@
 [project]
 name = "alluvia"
-version = "0.9.3"
+version = "0.9.4"
 description = "Your agent remembers this repo, and it will not lie about it. Local-first memory for Claude Code and friends, with receipts."
 readme = "README.md"
 license = {file = "LICENSE"}

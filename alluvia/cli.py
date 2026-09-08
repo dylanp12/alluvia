@@ -477,6 +477,9 @@ def _echo_memory_sync(pulled: dict, pushed: dict) -> None:
         typer.echo(f"memory: {_plural(pulled.get('notes_added', 0), 'note')} received · "
                    f"{_plural(pushed.get('notes', 0), 'note')} sent (Alluvia Cloud)")
         return
+    if pushed.get("limit") == "machines":
+        typer.echo("memory: Free syncs one machine. Pro syncs all of them: upgrade in Account at the app")
+        return
     err = pulled.get("error") or pushed.get("error") or "unknown error"
     typer.echo(f"memory sync: {err} (retries on the next refresh)")
 
