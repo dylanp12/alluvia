@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.9.2 — 2026-09-08
+
+- **An unforget reaches every machine.** A suppression retracted elsewhere
+  (the app, or another machine) is applied on import: the note comes back.
+  Older records without the field still suppress, as before.
+
 ## 0.9.1 — 2026-09-08
 
 Found on the first real sign-in: when Alluvia's own managed gateway failed, the

@@ -1,7 +1,7 @@
 {
   "name": "alluvia",
   "description": "Your agent remembers this repo, and it will not lie about it. Every session starts with the decisions, open loops, and tried paths of this repository, each with its receipt; nothing when nothing is known.",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "author": { "name": "Dylan Parent" },
   "homepage": "https://alluvia.dev",
   "repository": "https://github.com/dylanp12/alluvia",

@@ -88,3 +88,19 @@ def test_malformed_records_are_skipped_not_fatal(repo):
             {"kind": "note"}, {"nonsense": True}, "not even a dict"]
     out = import_bundle(repo, "local", recs, embedder=None)
     assert out["skipped"] == 3 and out["notes_added"] == 0
+
+
+def test_a_retracted_suppression_unsuppresses_locally(repo):
+    """A forget undone in the app must be undone on every machine: the
+    importer applies a retracted suppression; a 0.9.1-shaped record still
+    suppresses."""
+    _seed(repo)
+    assert "n:wrong" in repo.suppressed_note_ids("local")
+    out = import_bundle(repo, "local", [
+        {"kind": "suppressed", "note_id": "n:wrong", "reason": "wrong", "retracted": True,
+         "retracted_at": "2026-09-08T10:00:00+00:00"},
+        {"kind": "suppressed", "note_id": "n:never", "retracted": True}])       # never suppressed here: no-op
+    assert "n:wrong" not in repo.suppressed_note_ids("local")
+    assert out["judgments_added"] == 1 and out["skipped"] == 0
+    import_bundle(repo, "local", [{"kind": "suppressed", "note_id": "n:wrong", "reason": "wrong again"}])
+    assert "n:wrong" in repo.suppressed_note_ids("local")

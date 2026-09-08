@@ -101,7 +101,13 @@ def import_bundle(repo, user_id: str, records, embedder=None,
                 known_notes.add(nid)
                 out["notes_added"] += 1
             elif kind == "suppressed":
-                if r["note_id"] not in suppressed:
+                if r.get("retracted"):
+                    # a forget undone elsewhere (the app, another machine)
+                    if r["note_id"] in suppressed:
+                        repo.unsuppress_note(user_id, r["note_id"])
+                        suppressed.discard(r["note_id"])
+                        out["judgments_added"] += 1
+                elif r["note_id"] not in suppressed:
                     repo.suppress_note(user_id, r["note_id"], reason=r.get("reason"))
                     suppressed.add(r["note_id"])
                     out["judgments_added"] += 1
