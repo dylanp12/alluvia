@@ -24,17 +24,7 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _authed(session: dict, call):
-    """Run `call(token)`; on a 401 with a refresh token, refresh once and retry."""
-    try:
-        return call(session["token"])
-    except cloudclient.SyncError as e:
-        if e.code != 401 or not session.get("refresh"):
-            raise
-        token, refresh = cloudclient.refresh_session(session["url"], session["refresh"])
-        cloudclient.save_session(session["url"], token, refresh)
-        session.update(token=token, refresh=refresh)
-        return call(token)
+_authed = cloudclient.with_refresh          # every cloud call refreshes an expired token
 
 
 def _limit_of(e: Exception) -> str:

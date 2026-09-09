@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 0.9.5 — 2026-09-08
+
+- **`alluvia cloud login` needs nothing after it.** The app's address is the
+  default; `--url` remains for self-hosting.
+- **Every cloud call refreshes an expired sign-in.** Access tokens live
+  minutes; `cloud status` and the processing key fetch now refresh like the
+  sync does, and if another process already rotated the token the newer one
+  is used. When the sign-in is really gone, one sentence says so.
+- **A first sync is not a timeout.** The client waits a full minute for a
+  large push; when it still runs long, the message says the server is still
+  working rather than that it could not be reached.
+
 ## 0.9.4 — 2026-09-08
 
 - **The plan's limits are said plainly.** When the cloud refuses a second

@@ -56,10 +56,10 @@ def test_memory_helpers_use_api_memory_with_a_short_timeout(monkeypatch):
     monkeypatch.setattr(cloudclient.urllib.request, "urlopen", fake_urlopen)
     cloudclient.post_memory("https://api.example.com/", "tok", [{"kind": "muted", "label": "x"}])
     cloudclient.get_memory("https://api.example.com", "tok", since="2026-09-07T09:05:00+00:00")
-    assert seen[0][:3] == ("POST", "https://api.example.com/api/memory", 15)
+    assert seen[0][:3] == ("POST", "https://api.example.com/api/memory", 60)
     assert json.loads(seen[0][3]) == {"records": [{"kind": "muted", "label": "x"}]}
     assert seen[1][:3] == ("GET", "https://api.example.com/api/memory"
-                           "?since=2026-09-07T09%3A05%3A00%2B00%3A00", 15)
+                           "?since=2026-09-07T09%3A05%3A00%2B00%3A00", 30)
 
 
 def test_http_error_carries_its_status(monkeypatch):
@@ -94,3 +94,60 @@ def test_login_always_prints_a_link_to_paste(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "https://app.example.com/cli/login?port=" in out
     assert "paste" in out.lower()
+
+
+def test_with_refresh_retries_after_a_rotated_token(monkeypatch, tmp_path):
+    """Access tokens live minutes; every call refreshes on a 401. If another
+    process already rotated the refresh token, the session file has the newer
+    token: use it before declaring the sign-in expired."""
+    from alluvia import cloudclient
+    monkeypatch.setenv("ALLUVIA_CLOUD_SESSION", str(tmp_path / "s.json"))
+    cloudclient.save_session("https://app.example.com", "old", "r1")
+    seen = []
+
+    def call(tok):
+        seen.append(tok)
+        if tok == "old":
+            raise cloudclient.SyncError("server returned 401: expired", code=401)
+        return {"ok": tok}
+    monkeypatch.setattr(cloudclient, "refresh_session", lambda url, ref: ("new", "r2"))
+    assert cloudclient.with_refresh(cloudclient.load_session(), call) == {"ok": "new"}
+    assert seen == ["old", "new"] and cloudclient.load_session()["refresh"] == "r2"
+
+    # the refresh token was already used by a hook in another process: the file holds the newer session
+    def failing_refresh(url, ref):
+        cloudclient.save_session("https://app.example.com", "newer", "r3")   # what the other process wrote
+        raise cloudclient.SyncError("refresh failed (400)")
+    monkeypatch.setattr(cloudclient, "refresh_session", failing_refresh)
+    sess = cloudclient.load_session(); sess["token"] = "old"
+    assert cloudclient.with_refresh(sess, call) == {"ok": "newer"}
+
+    # nothing left to try: one readable sentence
+    monkeypatch.setattr(cloudclient, "refresh_session", lambda url, ref: (_ for _ in ()).throw(cloudclient.SyncError("refresh failed (400)")))
+    sess = cloudclient.load_session(); sess["token"] = "old"
+    try:
+        cloudclient.with_refresh(sess, lambda tok: (_ for _ in ()).throw(cloudclient.SyncError("401", code=401)))
+    except cloudclient.SyncError as e:
+        assert "alluvia cloud login" in str(e) and e.code == 401
+    else:
+        raise AssertionError("expected SyncError")
+
+
+def test_sync_timeouts_fit_a_first_push(monkeypatch):
+    """A first push carries hundreds of notes; the server answers fast and
+    embeds afterwards, but the client must not give up in fifteen seconds."""
+    from alluvia import cloudclient
+    seen = []
+
+    class FakeResp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"records": [], "server_time": "t"}'
+
+    def fake_urlopen(req, timeout=0):
+        seen.append(timeout)
+        return FakeResp()
+    monkeypatch.setattr(cloudclient.urllib.request, "urlopen", fake_urlopen)
+    cloudclient.post_memory("https://api.example.com", "tok", [])
+    cloudclient.get_memory("https://api.example.com", "tok")
+    assert seen == [60, 30]

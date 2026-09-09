@@ -113,3 +113,43 @@ def test_status_reports_a_managed_outage(tmp_path, monkeypatch):
         "until": "2026-09-08T03:41:00+00:00"}))
     out = runner.invoke(cli.app, ["cloud", "status"]).output
     assert "managed distillation: unavailable" in out and "credit balance" in out
+
+
+def test_login_needs_no_url(tmp_path, monkeypatch):
+    """The one thing to remember is `alluvia cloud login`, nothing after it."""
+    from alluvia import cloud_memory
+    monkeypatch.setenv("ALLUVIA_DB", str(tmp_path / "t.db"))
+    monkeypatch.setenv("ALLUVIA_CLOUD_SESSION", str(tmp_path / "sess.json"))
+    monkeypatch.delenv("ALLUVIA_CLOUD_URL", raising=False)
+    monkeypatch.setattr(cli, "EMBED_DIM", 8)
+    monkeypatch.setattr(cloud_memory, "sync", lambda repo, user, **kw: {"ok": True, "pull": {}, "push": {}})
+    r = runner.invoke(cli.app, ["cloud", "login", "--token", "abc"])
+    assert r.exit_code == 0, r.output
+    from alluvia.cloudclient import load_session
+    assert load_session()["url"] == "https://app.alluvia.dev"
+
+
+def test_status_refreshes_an_expired_sign_in(tmp_path, monkeypatch):
+    from alluvia import cloudclient
+    _seed(monkeypatch, tmp_path)
+    cloudclient.save_session("https://api.example.com", "old", "r1")
+    monkeypatch.setattr(cloudclient, "refresh_session", lambda url, ref: ("new", "r2"))
+
+    def billing(url, tok):
+        if tok == "old":
+            raise cloudclient.SyncError("server returned 401: Signature has expired", code=401)
+        return {"plan": "pro", "status": "active", "usage": None}
+    monkeypatch.setattr(cloudclient, "get_billing", billing)
+    out = runner.invoke(cli.app, ["cloud", "status"]).output
+    assert "Pro" in out and "401" not in out
+    assert cloudclient.load_session()["token"] == "new"
+
+
+def test_status_says_when_the_sign_in_is_really_gone(tmp_path, monkeypatch):
+    from alluvia import cloudclient
+    _seed(monkeypatch, tmp_path)
+    cloudclient.save_session("https://api.example.com", "old", "r1")
+    monkeypatch.setattr(cloudclient, "refresh_session", lambda url, ref: (_ for _ in ()).throw(cloudclient.SyncError("refresh failed (400)")))
+    monkeypatch.setattr(cloudclient, "get_billing", lambda url, tok: (_ for _ in ()).throw(cloudclient.SyncError("server returned 401: expired", code=401)))
+    out = runner.invoke(cli.app, ["cloud", "status"]).output
+    assert "sign-in expired" in out and "alluvia cloud login" in out and "Signature" not in out

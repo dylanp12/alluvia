@@ -239,3 +239,27 @@ def test_pause_text_sells_pro_to_a_free_backlog(capsys):
     assert "1,000 sessions this month" in capsys.readouterr().out
     cli._echo_refresh_summary(stats, coverage=cov, signed_in=False)
     assert "alluvia cloud login" in capsys.readouterr().out
+
+
+def test_managed_key_fetch_refreshes_an_expired_sign_in(monkeypatch, tmp_path):
+    """Processing must not stop five minutes after sign-in: the key fetch
+    refreshes the token like every other call."""
+    from alluvia import cloudclient
+    from alluvia.llm import client as clientmod
+    monkeypatch.setenv("ALLUVIA_CLOUD_SESSION", str(tmp_path / "s.json"))
+    cloudclient.save_session("https://app.example.com", "old", "r1")
+    cloudclient.update_session(plan="pro")
+    monkeypatch.setattr(cloudclient, "refresh_session", lambda url, ref: ("new", "r2"))
+    fetched = []
+
+    def fetch(url, tok):
+        fetched.append(tok)
+        return None if tok == "old" else KEY
+
+    class Inner:
+        def __init__(self, *a, **k): pass
+        def complete_json(self, system, user): return {"notes": []}
+    monkeypatch.setattr(clientmod, "OpenAICompatLLM", Inner)
+    llm = ManagedLLM(key_fetcher=fetch)                 # the default session loader reads the file
+    assert llm.complete_json("s", "u") == {"notes": []}
+    assert fetched == ["old", "new"] and cloudclient.load_session()["token"] == "new"

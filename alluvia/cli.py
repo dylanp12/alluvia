@@ -481,6 +481,10 @@ def _echo_memory_sync(pulled: dict, pushed: dict) -> None:
         typer.echo("memory: Free syncs one machine. Pro syncs all of them: upgrade in Account at the app")
         return
     err = pulled.get("error") or pushed.get("error") or "unknown error"
+    if "timed out" in err:
+        typer.echo("memory sync: the server is still working through a large sync; "
+                   "check `alluvia cloud status` in a minute")
+        return
     typer.echo(f"memory sync: {err} (retries on the next refresh)")
 
 
@@ -1084,11 +1088,8 @@ def cloud_login(
 ):
     """Sign in to Alluvia Cloud. Opens your browser to authenticate; the token
     is returned to a one-shot local listener. --token sets one directly."""
-    from alluvia.cloudclient import loopback_login, save_session, SyncError
-    url = url or os.environ.get("ALLUVIA_CLOUD_URL")
-    if not url:
-        typer.echo("need --url (or set ALLUVIA_CLOUD_URL)")
-        raise typer.Exit(1)
+    from alluvia.cloudclient import DEFAULT_CLOUD_URL, loopback_login, save_session, SyncError
+    url = url or os.environ.get("ALLUVIA_CLOUD_URL") or DEFAULT_CLOUD_URL
     if token:
         save_session(url, token)
     else:
@@ -1110,8 +1111,12 @@ def cloud_login(
         typer.echo("refresh falls through to managed distillation when your provider "
                    "is limited; memory syncs after every session (alluvia cloud status)")
     else:
-        err = (res.get("pull") or {}).get("error") or (res.get("push") or {}).get("error")
-        typer.echo(f"memory sync: {err or 'skipped'} (retries on the next refresh)")
+        err = (res.get("pull") or {}).get("error") or (res.get("push") or {}).get("error") or "skipped"
+        if "timed out" in err:
+            typer.echo("memory sync: the server is still working through your first sync; "
+                       "check `alluvia cloud status` in a minute")
+        else:
+            typer.echo(f"memory sync: {err} (retries on the next refresh)")
 
 
 def _ago(iso: str) -> str:
@@ -1142,9 +1147,12 @@ def cloud_status():
         return
     typer.echo(f"signed in · {sess['url']}")
     try:
-        b = cloudclient.get_billing(sess["url"], sess["token"])
+        b = cloudclient.with_refresh(sess, lambda tok: cloudclient.get_billing(sess["url"], tok))
     except cloudclient.SyncError as e:
-        typer.echo(f"plan and usage: unavailable ({e})")
+        if e.code == 401:
+            typer.echo("your sign-in expired: run `alluvia cloud login`")
+        else:
+            typer.echo(f"plan and usage: unavailable right now ({e})")
     else:
         cloudclient.update_session(plan=str(b.get("plan") or "free"))
         plan = str(b.get("plan") or "free").capitalize()

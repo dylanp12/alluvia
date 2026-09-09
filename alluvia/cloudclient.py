@@ -9,6 +9,9 @@ import urllib.error
 import urllib.request
 
 
+DEFAULT_CLOUD_URL = "https://app.alluvia.dev"
+
+
 def session_path() -> str:
     return os.environ.get("ALLUVIA_CLOUD_SESSION",
                           os.path.expanduser("~/.alluvia/cloud-session.json"))
@@ -92,8 +95,10 @@ def _request(url: str, path: str, token: str, method: str = "GET",
 
 
 def post_memory(url: str, token: str, records: list) -> dict:
-    """Upsert never-raw memory records (the 0.8 bundle format) for the account."""
-    return _request(url, "/api/memory", token, method="POST", body={"records": list(records)})
+    """Upsert never-raw memory records (the 0.8 bundle format) for the account.
+    A first push carries hundreds of notes; the server answers as soon as they
+    are stored and embeds afterwards, so a minute is generous, not tight."""
+    return _request(url, "/api/memory", token, method="POST", body={"records": list(records)}, timeout=60)
 
 
 def get_billing(url: str, token: str) -> dict:
@@ -105,7 +110,37 @@ def get_memory(url: str, token: str, since: str | None = None) -> dict:
     """Records updated after `since` (all when None) plus the server clock."""
     import urllib.parse
     q = "?" + urllib.parse.urlencode({"since": since}) if since else ""
-    return _request(url, "/api/memory" + q, token)
+    return _request(url, "/api/memory" + q, token, timeout=30)
+
+
+def with_refresh(session: dict, call):
+    """Run `call(token)`. Access tokens live minutes, so a 401 means refresh
+    once and retry. If another process already rotated the refresh token, the
+    session file holds the newer token: try that before declaring the sign-in
+    expired. Every cloud call goes through here."""
+    try:
+        return call(session["token"])
+    except SyncError as e:
+        if e.code != 401:
+            raise
+    if session.get("refresh"):
+        try:
+            token, refresh = refresh_session(session["url"], session["refresh"])
+            update_session(token=token, refresh=refresh)
+            session.update(token=token, refresh=refresh)
+            return call(token)
+        except SyncError:
+            pass
+    fresh = load_session() or {}
+    if fresh.get("token") and fresh["token"] != session["token"]:
+        try:
+            out = call(fresh["token"])
+            session.update(fresh)
+            return out
+        except SyncError as e:
+            if e.code != 401:
+                raise
+    raise SyncError("your sign-in expired: run `alluvia cloud login`", code=401)
 
 
 def push_bundle(url: str, token: str, bundle: dict) -> dict:

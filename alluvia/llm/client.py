@@ -165,10 +165,19 @@ class ManagedLLM:
 
     def _inner_(self):
         if self._inner is None:
+            from alluvia import cloudclient
             sess = self._load() or {}
             info = None
             if sess.get("url") and sess.get("token"):
-                info = self._fetch(sess["url"], sess["token"])
+                def fetch(tok):
+                    got = self._fetch(sess["url"], tok)
+                    if got is None:                       # expired, refused, or unreachable
+                        raise cloudclient.SyncError("key fetch failed", code=401)
+                    return got
+                try:
+                    info = cloudclient.with_refresh(sess, fetch)
+                except cloudclient.SyncError:
+                    info = None
             if not info or not info.get("key") or not info.get("base_url"):
                 raise ManagedKeyUnavailable(
                     "managed distillation unavailable: could not fetch the account key "
