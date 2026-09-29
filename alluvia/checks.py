@@ -322,9 +322,12 @@ def verify_check(project, selector, before, after="HEAD", *, requirement, source
     if destination is not None and os.path.lexists(destination):
         raise CheckError("Output path already exists; choose a new directory")
     with tempfile.TemporaryDirectory(prefix="alluvia-check-") as temp:
+        # macOS /var aliases and Windows short paths must match pytest's cwd
+        # and the resolved paths used for test-integrity checks.
+        temp_root = Path(temp).resolve()
         sides = []
         for label, commit in zip(("before", "after"), commits):
-            directory = Path(temp) / label
+            directory = temp_root / label
             directory.mkdir()
             sides.append(_run_side(root, project.relative_to(root), commit, relative,
                                    selector, frozen, executable, timeout, directory))

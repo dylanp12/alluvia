@@ -307,3 +307,24 @@ def test_relative_python_uses_the_callers_directory_and_preserves_venv(tmp_path,
 
     assert report["status"] == "verified", report
     assert report["before"]["command"][0] == str(executable)
+
+
+@pytest.mark.parametrize("nested", ["", "packages/service"])
+def test_symlinked_temporary_parent_preserves_selection_and_integrity(tmp_path, monkeypatch, nested):
+    import tempfile
+
+    _, project, old, new = history(tmp_path, nested=nested)
+    real_temp = tmp_path / "real-temp"
+    real_temp.mkdir()
+    alias = tmp_path / "temp-alias"
+    alias.symlink_to(real_temp, target_is_directory=True)
+    monkeypatch.setattr(tempfile, "tempdir", str(alias))
+
+    report = verify(project, old, new)
+
+    assert report["status"] == "verified", {
+        side: {key: report[side][key] for key in ("selected_nodeids", "test_intact", "returncode")}
+        for side in ("before", "after")}
+    for side in ("before", "after"):
+        assert report[side]["selected_nodeids"] == ["tests/test_guard.py::test_guard"]
+        assert report[side]["test_intact"]
