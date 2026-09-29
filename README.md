@@ -17,7 +17,7 @@
 
 # alluvia
 
-**Your agent remembers this repo, and it will not lie about it.**
+**Carry this repo's decisions into your next Claude Code session.**
 
 Every Claude Code session in a repository starts with what you already decided
 there: the decisions and problems from your last session, the loops still
@@ -28,17 +28,52 @@ says "no record" instead of inventing one.
 
 Local-first, MIT. Raw conversations never leave your machine.
 
-## Sixty seconds
+## Protect a correction with a test
+
+Already fixed a Python behavior? Install Alluvia:
 
 ```bash
-uv tool install alluvia && alluvia init          # detect your sources, pick a provider
-alluvia refresh                                  # distill what is already on disk (local embeddings)
-/plugin marketplace add dylanp12/alluvia          # in Claude Code
-/plugin install alluvia@alluvia
+uv tool install alluvia
 ```
 
-No plugin yet? `alluvia demo` shows every lens in 30 seconds on synthetic data,
-and `alluvia recall "the thing I'm debugging"` answers from your own history.
+Then, in Claude Code:
+
+```text
+/plugin marketplace add dylanp12/alluvia
+/plugin install alluvia@alluvia
+/alluvia:protect Uploads must be smaller than 8 MiB; exactly 8 MiB must be rejected.
+```
+
+Your agent finds the source and the committed revisions, writes one pytest
+test, and uses Alluvia to run identical test bytes before and after the fix.
+You receive an ordinary test and a receipt with the requirement, source,
+commit IDs, test hash, and results. The test runs without Alluvia afterward.
+
+This workflow uses your existing agent and Python test environment. It needs
+no cloud account, history refresh, or extra model key. A current instruction
+can supply the source when you have no captured history.
+
+**Verified** means the selected test failed by assertion before the fix and
+passed afterward. Review that assertion against the requirement: the result
+does not prove the whole feature correct. Tests run with your user permissions;
+temporary snapshots are not a security sandbox.
+
+See the [guide and CLI commands](docs/PROTECT.md) or run the
+[small upload-limit example](docs/examples/protect/README.md).
+
+## Add project memory
+
+To carry decisions from your earlier sessions into the next one, set up
+Alluvia's history processing:
+
+```bash
+alluvia init          # detect your sources, pick a provider
+alluvia refresh       # distill what is already on disk (local embeddings)
+```
+
+The same plugin delivers project context. No plugin yet? `alluvia demo`
+shows every lens in 30 seconds on synthetic data, and
+`alluvia recall "the thing I'm debugging"` answers from your own history.
 
 ## What arrives at session start
 
@@ -57,9 +92,10 @@ useful? alluvia handoff --kept · noise? alluvia handoff --noise
 
 Captured at session end and before compaction, distilled in bounded windows
 that always keep the end of the session (where decisions land), with no
-resident process and no model call per tool use. Injection needs an
-interactive session; headless `claude -p` runs receive no session-start
-context in Claude Code, though the capture hooks still run.
+resident process and no model call per tool use. Startup delivery was verified
+with a configured SessionStart hook in interactive and headless `claude -p`
+sessions on Claude Code 2.1.263. Hook support depends on the host and version;
+importing another tool's history does not install startup delivery into it.
 
 ## Memory you can trust
 
@@ -70,8 +106,10 @@ context in Claude Code, though the capture hooks still run.
   actually answers you.
 - **Honest refusal.** No record means "no record". A golden query set of
   must-refuse questions runs with the test suite.
-- **Correctable.** `alluvia forget <note-id>` suppresses a wrong or stale note
-  everywhere, for good, without touching raw sessions.
+- **Correctable.** `alluvia forget <note-id>` hides a wrong or stale note from
+  local search and the next session's briefing, without touching raw sessions.
+  `alluvia unforget <note-id>` restores it. Other machines receive the change
+  after their next sync or import.
 - **Nothing of yours becomes a note.** Harness-injected content (skill bodies,
   command expansions, compaction summaries) is never treated as your thinking.
 
@@ -217,9 +255,9 @@ about **that repository**: the decisions and problems from your last session
 there, the loops still open, earlier decisions, each line naming the session
 it came from. The same block comes back after every compaction, so a
 compacted thread does not lose what it was doing. When alluvia knows nothing
-about a repo, it injects nothing. (Injection needs an interactive session; in
-headless `claude -p` runs Claude Code applies no session-start context, though
-the capture hooks still run.)
+about a repo, it injects nothing. Startup delivery was verified in interactive
+and headless `claude -p` sessions on Claude Code 2.1.263; support depends on
+the host and version.
 
 It works from transcripts already on your disk, distilled at session end and
 before compaction, with no resident process and no model call per tool use.

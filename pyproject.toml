@@ -1,7 +1,7 @@
 [project]
 name = "alluvia"
-version = "0.9.5"
-description = "Your agent remembers this repo, and it will not lie about it. Local-first memory for Claude Code and friends, with receipts."
+version = "0.10.0"
+description = "Project memory and verified regression checks for Claude Code. Local-first, with source receipts and correction controls."
 readme = "README.md"
 license = {file = "LICENSE"}
 authors = [{name = "Dylan Parent"}]

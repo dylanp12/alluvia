@@ -7,6 +7,8 @@ from alluvia.store.repo import Repo
 from alluvia.ingest.claude_code import ClaudeCodeAdapter
 
 app = typer.Typer(help="alluvia — resurface ideas from across your AI history")
+from alluvia.checks_cli import app as checks_app
+app.add_typer(checks_app, name="checks")
 
 # embeddings dim is fixed once the engine phase lands; 384 = bge-small default.
 EMBED_DIM = 384
@@ -804,6 +806,8 @@ def init():
                                                          reporter=rep)
             finally:
                 rep.close()
+            from alluvia.hooks import refresh_handoffs
+            refresh_handoffs(repo, config.DEFAULT_USER)
             typer.echo(f"themes: {len(repo.list_themes(config.DEFAULT_USER))}")
 
     typer.echo("\nNext steps:")
@@ -1012,7 +1016,7 @@ def _run_hook(event: str) -> None:
 
 @hook_app.command("session-start")
 def hook_session_start():
-    """Inject what alluvia knows about this repo (reads the cached handoff)."""
+    """Inject current local knowledge for this repo, including corrections."""
     _run_hook("session-start")
 
 

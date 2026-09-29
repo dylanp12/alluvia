@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+_Nothing yet._
+
+## 0.10.0 — 2026-09-29
+
+- Added: `/alluvia:protect` and `alluvia checks` turn a corrected Python
+  behavior into a pytest check with its source, committed revisions, and
+  recorded results. Verification requires the same test to fail by assertion
+  before the fix and pass afterward; the exported test runs without Alluvia.
+- Fixed: startup builds its briefing from current local records, so forget,
+  undo, and imported corrections take effect in the next session even when
+  saved snapshots are stale or missing. Startup uses no model or network.
+- Fixed: initial setup prepares project briefings after processing history.
+- Fixed: correction-only cloud pulls refresh saved briefings and shared memory,
+  including when the later upload fails.
+- Fixed: earlier decisions are selected by session recency before message
+  position, keeping recent short sessions from being crowded out by older ones.
+- Fixed: delivery records count only note lines included in the emitted briefing.
+- Changed: describe project memory and correction controls without promising
+  that an agent will never make a false claim.
+
 ## 0.9.5 — 2026-09-08
 
 - **`alluvia cloud login` needs nothing after it.** The app's address is the

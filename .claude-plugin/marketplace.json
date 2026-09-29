@@ -1,11 +1,12 @@
 {
   "name": "alluvia",
+  "description": "Project memory and regression checks for Claude Code, with sources.",
   "owner": { "name": "Dylan Parent" },
   "plugins": [
     {
       "name": "alluvia",
       "source": "./",
-      "description": "Local-first memory for this repo, with receipts. Requires the alluvia CLI (uv tool install alluvia)."
+      "description": "Project memory and regression checks, with receipts. Requires the alluvia CLI (uv tool install alluvia)."
     }
   ]
 }

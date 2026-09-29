@@ -28,9 +28,9 @@ def build_project_handoff(repo, user_id: str, project: str,
 def build_project_handoff_struct(repo, user_id: str, project: str,
                                  now: datetime | None = None) -> dict | None:
     """The briefing as data: what the last session settled, what is open here,
-    earlier decisions, the footer lines, and the ids of the notes shown. The
-    plugin's text is rendered from this, so an app that renders it can never
-    disagree with what the agent was told."""
+    earlier decisions, the footer lines, and candidate note ids in ``shown``.
+    The plugin renders this structure within its character budget; use
+    build_project_handoff_with_ids for the ids that survive that limit."""
     sessions = repo.list_session_meta(user_id, project=project)
     if not sessions:
         return None
@@ -40,13 +40,17 @@ def build_project_handoff_struct(repo, user_id: str, project: str,
              if n.session_id in by_id and n.id not in hidden]
     if not notes:
         return None
+    by_session: dict[str, list[Note]] = {}
+    for note in notes:
+        by_session.setdefault(note.session_id, []).append(note)
     native = {sid: s["native_id"][:8] for sid, s in by_id.items()}
 
     def when(sid: str) -> datetime:
         s = by_id[sid]
         return to_utc(s["ended_at"] or s["started_at"]) or _EPOCH
 
-    latest_sid = max({n.session_id for n in notes}, key=when)
+    session_order = sorted(by_session, key=lambda sid: (when(sid), sid), reverse=True)
+    latest_sid = session_order[0]
     latest = by_id[latest_sid]
     stamp = latest["ended_at"] or latest["started_at"]
     head = (f"last session {stamp.date().isoformat() if stamp else 'undated'}"
@@ -59,21 +63,27 @@ def build_project_handoff_struct(repo, user_id: str, project: str,
             return -1
 
     def pick(pool: list[Note], k: int = PER_SECTION) -> list[Note]:
-        # decisions first; within a kind, later in the session = the settled view
-        return sorted(pool, key=lambda n: (KIND_ORDER.get(n.kind, 9), -span(n), n.text))[:k]
+        # Decisions first; within a kind, prefer later messages in this session.
+        return sorted(pool, key=lambda n: (KIND_ORDER.get(n.kind, 9), -span(n), n.text, n.id))[:k]
 
     def item(n: Note) -> dict:
         return {"kind": "note", "id": n.id, "note_kind": n.kind, "text": n.text,
                 "session_id": n.session_id, "session_native": native[n.session_id]}
 
-    last = [item(n) for n in pick([n for n in notes if n.session_id == latest_sid])]
+    last = [item(n) for n in pick(by_session[latest_sid])]
     mine = {n.id for n in notes}
     open_ = [{"kind": "topic", "id": t.id, "label": t.label, "status": t.status,
               "session_count": t.session_count}
              for t in repo.list_themes(user_id)
              if t.status in ("open", "dormant") and any(nid in mine for nid in t.note_ids)][:PER_SECTION]
-    older = pick([n for n in notes if n.kind == "decision" and n.session_id != latest_sid])
-    earlier = [item(n) for n in sorted(older, key=lambda n: when(n.session_id), reverse=True)]
+    earlier = []
+    for sid in session_order[1:]:
+        # Message positions only rank notes within the same conversation.
+        remaining = PER_SECTION - len(earlier)
+        earlier.extend(item(n) for n in pick(
+            [n for n in by_session[sid] if n.kind == "decision"], k=remaining))
+        if len(earlier) == PER_SECTION:
+            break
     distilled = repo.done_session_ids(user_id)
     pending = sum(1 for sid in by_id if sid not in distilled)
     foot = f"{len(sessions)} session{'s' if len(sessions) != 1 else ''} in this repo"
@@ -94,20 +104,40 @@ def _fmt(it: dict, prefix: str) -> str:
     return f"- {prefix}{body} (session {it['session_native']})"
 
 
-def render_handoff(s: dict, max_chars: int = MAX_CHARS) -> str:
-    """The exact text the plugin injects, rendered from the structure."""
-    lines = [f"alluvia · prior context for this repo ({s['project']})", f"{s['head']}:"]
-    lines += [_fmt(it, f"[{it['note_kind']}] ") for it in s["last"]]
-    lines += [f"- open here: {t['label']} [{t['status']}] · {t['session_count']} sessions"
+def _render_handoff_with_ids(s: dict, max_chars: int) -> tuple[str, list[str]]:
+    lines: list[tuple[str, str | None]] = [
+        (f"alluvia · prior context for this repo ({s['project']})", None),
+        (f"{s['head']}:", None),
+    ]
+    lines += [(_fmt(it, f"[{it['note_kind']}] "), it["id"]) for it in s["last"]]
+    lines += [(f"- open here: {t['label']} [{t['status']}] · {t['session_count']} sessions", None)
               for t in s["open"]]
     if s["earlier"]:
-        lines.append("earlier decisions here:")
-        lines += [_fmt(it, "") for it in s["earlier"]]
-    lines += s["footer"]
-    text = "\n".join(lines)
-    if len(text) > max_chars:
-        text = text[:max_chars - 1].rsplit("\n", 1)[0] + "\n…"
-    return text
+        lines.append(("earlier decisions here:", None))
+        lines += [(_fmt(it, ""), it["id"]) for it in s["earlier"]]
+    lines += [(line, None) for line in s["footer"]]
+    text = "\n".join(line for line, _ in lines)
+    if len(text) <= max_chars:
+        return text, [note_id for _, note_id in lines if note_id is not None]
+
+    visible: list[str] = []
+    shown: list[str] = []
+    used = 0
+    for line, note_id in lines:
+        added = len(line) + bool(visible)
+        if used + added + 2 > max_chars:  # Reserve the final newline and ellipsis.
+            break
+        visible.append(line)
+        used += added
+        if note_id is not None:
+            shown.append(note_id)
+    text = "\n".join(visible)
+    return (text + "\n…" if visible else "…" if max_chars > 0 else ""), shown
+
+
+def render_handoff(s: dict, max_chars: int = MAX_CHARS) -> str:
+    """The exact text the plugin injects, rendered from the structure."""
+    return _render_handoff_with_ids(s, max_chars)[0]
 
 
 def build_project_handoff_with_ids(repo, user_id: str, project: str,
@@ -118,4 +148,4 @@ def build_project_handoff_with_ids(repo, user_id: str, project: str,
     s = build_project_handoff_struct(repo, user_id, project, now=now)
     if s is None:
         return None, []
-    return render_handoff(s, max_chars), s["shown"]
+    return _render_handoff_with_ids(s, max_chars)

@@ -1,7 +1,7 @@
 {
   "name": "alluvia",
-  "description": "Your agent remembers this repo, and it will not lie about it. Every session starts with the decisions, open loops, and tried paths of this repository, each with its receipt; nothing when nothing is known.",
-  "version": "0.9.5",
+  "description": "Remember this repository's decisions and turn corrected Python behavior into a regression test with /alluvia:protect. Source-linked briefings and local before/after verification. Requires the Alluvia CLI.",
+  "version": "0.10.0",
   "author": { "name": "Dylan Parent" },
   "homepage": "https://alluvia.dev",
   "repository": "https://github.com/dylanp12/alluvia",

@@ -1,8 +1,8 @@
 """Claude Code hook handlers.
 
-session-start: read the cached handoff for the repo the session runs in and
-hand it back as `additionalContext`. No model, no LLM, no network — a few
-milliseconds. Nothing cached → nothing injected.
+session-start: build the handoff from the repo's current local records and
+hand it back as `additionalContext`. No model, no LLM, no network. Saved
+handoffs are snapshots, never an authority over subsequent corrections.
 
 session-end / pre-compact: ingest the live transcript (one file, one
 session), distill that session, embed its notes, rebuild this repo's
@@ -57,22 +57,18 @@ def run_session_start(payload: dict, repo) -> dict | None:
         # a repo that carries its own memory (.alluvia/memory.jsonl) is imported
         # first — SQLite only, milliseconds — so a fresh clone or a second
         # machine gets the repo's handoff on its very first session
-        imported = import_share_if_changed(repo, config.DEFAULT_USER, project)
-        if imported and (imported["sessions_added"] or imported["notes_added"]):
-            write_handoff(repo, config.DEFAULT_USER, project)
+        import_share_if_changed(repo, config.DEFAULT_USER, project)
     except Exception as e:                       # noqa: BLE001 — never block the session
-        log.warning("repo memory import skipped: %r", e)
-    path = handoff_path(project)
-    if not path.exists():
+        # An unreadable share may contain a correction. Do not inject an
+        # older local view while that correction state is uncertain.
+        log.warning("repo memory unavailable; context withheld: %r", e)
         return None
-    text = path.read_text(encoding="utf-8").strip()
+    # Always read the current judgments, including corrections from a direct
+    # memory import. Rebuilding is deterministic and needs neither embeddings
+    # nor a provider. Never fall back to a stale or untrusted cache on error.
+    text, ids = build_project_handoff_with_ids(repo, config.DEFAULT_USER, project)
     if not text:
         return None
-    try:
-        side = json.loads(sidecar_path(project).read_text(encoding="utf-8"))
-        ids = list(side.get("note_ids") or [])
-    except (OSError, ValueError):
-        ids = []
     repo.record_handoff_event(config.DEFAULT_USER, project, ids, chars=len(text),
                               source=payload.get("source"))
     return {"hookSpecificOutput": {"hookEventName": "SessionStart",
@@ -132,15 +128,16 @@ def run_capture(payload: dict, repo, engine, now=None) -> dict:
         stats["cloud"] = cloud_memory.sync(repo, user)
     except Exception as e:                        # noqa: BLE001 — never fail the hook
         stats["cloud"] = {"ok": False, "error": repr(e)}
-    pulled = (stats["cloud"].get("pull") or {}).get("notes_added", 0) if stats["cloud"].get("ok") else 0
+    pulled = stats["cloud"].get("pull") or {}
     if project:
         _mark_references(repo, user, project, session)
         stats["handoff_written"] = write_handoff(repo, user, project, now=now)
         if is_shared(project):
             stats["share_notes"] = write_share(repo, user, project)
-    if pulled:
-        # another machine's notes arrived: every repo's next session start
-        # should already see them, not wait for a hook to run there
+    if pulled.get("ok") and any(pulled.get(k) for k in (
+            "sessions_added", "notes_added", "judgments_added")):
+        # Keep snapshots and opt-in shared files current after imported
+        # corrections too, even if the subsequent cloud push failed.
         stats["handoffs_rebuilt"] = refresh_handoffs(repo, user, now=now)
     _stamp(repo, "hook:last_run")
     return stats
