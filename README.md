@@ -5,7 +5,7 @@
   </picture>
 </p>
 
-<p align="center"><em>Pan your AI history for gold.</em></p>
+<p align="center"><em>Verify that your regression test catches the bug you fixed.</em></p>
 
 <p align="center">
   <a href="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml"><img src="https://github.com/dylanp12/alluvia/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
@@ -17,20 +17,25 @@
 
 # alluvia
 
-**Carry this repo's decisions into your next Claude Code session.**
+**A passing test is more useful when you know it catches the original bug.**
 
-Every Claude Code session in a repository starts with what you already decided
-there: the decisions and problems from your last session, the loops still
-open, earlier decisions, each line naming the session it came from. The same
-block comes back after every compaction. When alluvia knows nothing about a
-repo, it injects nothing. When you ask a question and there is no record, it
-says "no record" instead of inventing one.
+Alluvia Protect runs the same pytest test against the code before and after a
+fix. An assertion failure before and a pass afterward produce a verified
+result. Keep the ordinary test, the correction that motivated it, and the
+recorded evidence.
 
-Local-first, MIT. Raw conversations never leave your machine.
+[Watch the real demonstration](https://alluvia.dev/protect?utm_source=github&utm_medium=readme&utm_campaign=protect-launch#demo)
+· [Run the worked example](docs/examples/protect/README.md)
+· [Read the guide](docs/PROTECT.md)
+
+Free, MIT licensed. Uses your existing Claude Code account and Python test
+environment. No Alluvia account or extra model key is required for Protect.
+Project memory is available in the same plugin when you want it.
 
 ## Protect a correction with a test
 
-Already fixed a Python behavior? Install Alluvia:
+Already fixed a Python behavior? You need Git, Python 3.12 or later for
+Alluvia, and a project with an existing pytest environment. Install Alluvia:
 
 ```bash
 uv tool install alluvia
@@ -61,7 +66,26 @@ temporary snapshots are not a security sandbox.
 See the [guide and CLI commands](docs/PROTECT.md) or run the
 [small upload-limit example](docs/examples/protect/README.md).
 
+### Install only the Protect skill
+
+If you want the skill without the memory plugin, install the CLI above, then
+run this in your project with Node.js 22.20 or later:
+
+```bash
+npx skills add dylanp12/alluvia --skill protect --agent claude-code
+```
+
+Invoke it as `/protect <your correction>` in Claude Code. The standalone
+skill still needs Alluvia 0.10.0 or later and your project's pytest environment.
+It does not install the memory hooks or MCP server. See the
+[Protect skill listing](https://skills.sh/dylanp12/alluvia/protect).
+
 ## Add project memory
+
+Every Claude Code session can start with this repository's earlier decisions,
+open problems, and the sessions they came from. The same briefing returns
+after compaction. If Alluvia has no record, it says so. Local records stay on
+your machine; signing in for Cloud sync is optional.
 
 To carry decisions from your earlier sessions into the next one, set up
 Alluvia's history processing:
